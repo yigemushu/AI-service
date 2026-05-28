@@ -11,9 +11,14 @@ desktop.ini
 # Local environment
 .env
 .env.local
+.env*.local
 
 # Generated output
+.next/
 dist/
 build/
 node_modules/
 __pycache__/
+*.log
+*.tsbuildinfo
+.playwright-cli/

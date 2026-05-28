@@ -1,0 +1,137 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { Field } from "@/components/Field";
+import { Section } from "@/components/Section";
+import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
+import { businessTypeLabels, orderStatuses } from "@/lib/constants";
+import { formatItemSummary } from "@/lib/format";
+import { normalizeOrder } from "@/lib/orderUtils";
+import { getOrders, saveOrders } from "@/lib/storage";
+import type { IntentLevel, Order, OrderStatus } from "@/lib/types";
+
+export default function OrderDetailPage({ params }: { params: { id: string } }) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const order = useMemo(() => orders.find((item) => item.id === params.id), [orders, params.id]);
+
+  useEffect(() => {
+    const normalized = getOrders().map(normalizeOrder);
+    setOrders(normalized);
+    saveOrders(normalized.map((item) => (item.id === params.id ? { ...item, isNew: false } : item)));
+  }, [params.id]);
+
+  function updateOrder(patch: Partial<Order>) {
+    const next = orders.map((item) => (item.id === params.id ? { ...item, ...patch, isNew: false, updatedAt: new Date().toISOString() } : item));
+    setOrders(next);
+    saveOrders(next);
+  }
+
+  if (!order) {
+    return (
+      <div className="space-y-5">
+        <Link className={secondaryButtonClass} href="/orders">返回客户订单</Link>
+        <Section title="订单不存在">
+          <p className="text-sm text-slate-500">这条订单可能已被清空或仍在加载。</p>
+        </Section>
+      </div>
+    );
+  }
+
+  const products = order.analysis?.products || [];
+  const itemSummary = products.length > 0 ? formatItemSummary(products) : order.itemSummary;
+  const missingInfo = order.analysis?.missingInfo || [];
+  const risks = order.analysis?.risks || [];
+  const nextActions = order.analysis?.nextActions || [];
+
+  return (
+    <div className="space-y-5">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-950">订单详情</h1>
+          <p className="mt-1 text-sm text-slate-500">查看客户画像、需求拆解、风险点和跟进记录。</p>
+        </div>
+        <Link className={secondaryButtonClass} href="/orders">返回客户订单</Link>
+      </header>
+
+      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <Section title="客户画像">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="客户昵称">
+              <input className={inputClass} value={order.customerName} onChange={(event) => updateOrder({ customerName: event.target.value })} />
+            </Field>
+            <Field label="来源平台">
+              <input className={inputClass} value={order.platform} onChange={(event) => updateOrder({ platform: event.target.value })} />
+            </Field>
+            <Field label="业务类型">
+              <input className={inputClass} value={businessTypeLabels[order.businessType]} readOnly />
+            </Field>
+            <Field label="意向等级">
+              <select className={inputClass} value={order.intentLevel} onChange={(event) => updateOrder({ intentLevel: event.target.value as IntentLevel })}>
+                <option value="高">高</option>
+                <option value="中">中</option>
+                <option value="低">低</option>
+              </select>
+            </Field>
+            <Field label="当前状态">
+              <select className={inputClass} value={order.status} onChange={(event) => updateOrder({ status: event.target.value as OrderStatus })}>
+                {orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </Field>
+            <Field label="创建时间">
+              <input className={inputClass} value={new Date(order.createdAt).toLocaleString("zh-CN")} readOnly />
+            </Field>
+          </div>
+          <div className="mt-4">
+            <Field label="跟进备注">
+              <textarea className={`${textareaClass} min-h-28`} value={order.note} onChange={(event) => updateOrder({ note: event.target.value })} />
+            </Field>
+          </div>
+        </Section>
+
+        <Section title="需求摘要">
+          <div className="space-y-4 text-sm">
+            <InfoBlock title="客户诉求" content={order.analysis?.customerIntent || order.summary} />
+            <InfoBlock title="商品/服务" content={itemSummary || "待确认"} />
+            <InfoBlock title="推荐回复草稿" content={order.analysis?.reply || "暂无"} strong />
+          </div>
+        </Section>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Section title="缺失信息">
+          <SimpleList items={missingInfo} empty="暂无明显缺失" />
+        </Section>
+        <Section title="风险点">
+          <SimpleList items={risks} empty="暂无明显风险" />
+        </Section>
+        <Section title="下一步动作">
+          <SimpleList items={nextActions} empty="暂无下一步动作" />
+        </Section>
+      </div>
+
+      <Section title="原始客户消息">
+        <pre className="whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-sm text-slate-700">{order.rawMessage || "暂无"}</pre>
+      </Section>
+    </div>
+  );
+}
+
+function InfoBlock({ title, content, strong = false }: { title: string; content: string; strong?: boolean }) {
+  return (
+    <div>
+      <div className="mb-1 font-semibold text-slate-800">{title}</div>
+      <div className={`rounded-md border border-slate-200 p-3 ${strong ? "bg-amber-50" : "bg-slate-50"}`}>{content}</div>
+    </div>
+  );
+}
+
+function SimpleList({ items, empty }: { items: string[]; empty: string }) {
+  return (
+    <ul className="space-y-2 text-sm text-slate-700">
+      {(items.length ? items : [empty]).map((item) => (
+        <li key={item} className="rounded-md bg-slate-50 p-2">{item}</li>
+      ))}
+    </ul>
+  );
+}
