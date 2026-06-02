@@ -8,13 +8,7 @@ export type SourcePlatform = "闲鱼" | "微信" | "淘宝" | "拼多多" | "Fac
 
 export type AnalyzeResult = {
   customerIntent: string;
-  products: Array<{
-    name: string;
-    quantity: string;
-    unit?: string;
-    notes?: string;
-    confidence?: "高" | "中" | "低";
-  }>;
+  products: Array<{ name: string; quantity: string; unit?: string; notes?: string; confidence?: "高" | "中" | "低" }>;
   missingInfo: string[];
   risks: string[];
   nextActions: string[];
@@ -31,20 +25,8 @@ export type AnalyzeApiResponse = {
   customer_intent: string;
   order_status: string;
   urgency: "low" | "medium" | "high";
-  items: Array<{
-    name: string;
-    quantity: string;
-    unit: string;
-    note: string;
-    confidence: "high" | "medium" | "low";
-  }>;
-  customer_info: {
-    name: string;
-    platform: string;
-    address: string;
-    phone: string;
-    preferred_time: string;
-  };
+  items: Array<{ name: string; quantity: string; unit: string; note: string; confidence: "high" | "medium" | "low" }>;
+  customer_info: { name: string; platform: string; address: string; phone: string; preferred_time: string };
   missing_info: string[];
   risk_flags: string[];
   next_action: string[];
@@ -82,12 +64,41 @@ export type MessageTemplate = {
 
 export type OptimizationRecord = {
   id: string;
+  source?: "manual" | "evaluation";
+  sampleId?: string;
+  businessType?: BusinessType;
   rawMessage: string;
   aiOutput: string;
   errorType: string;
   correctResult: string;
+  improvementAction?: string;
+  status?: "待优化" | "已优化" | "已复测";
+  priority?: "高" | "中" | "低";
   optimized: boolean;
   updatedAt: string;
+};
+
+export type EvaluationRun = {
+  id: string;
+  sampleGroup: "基础" | "刁钻" | "全部";
+  createdAt: string;
+  average: number;
+  totalSamples: number;
+  totalScore: number;
+  totalPossible: number;
+  byType: Record<BusinessType, { count: number; average: number }>;
+  metricFails: Record<string, number>;
+  results: Array<{
+    sampleId: string;
+    businessType: BusinessType;
+    title: string;
+    message: string;
+    score: number;
+    failedMetrics: string[];
+    outputSummary?: string;
+    outputReply?: string;
+    outputStatus?: string;
+  }>;
 };
 
 export type Settings = {

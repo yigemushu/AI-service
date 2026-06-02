@@ -39,25 +39,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="space-y-3">
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">账号</span>
-              <input
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                value={account}
-                onChange={(event) => setAccount(event.target.value)}
-              />
+              <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" value={account} onChange={(event) => setAccount(event.target.value)} />
             </label>
             <label className="block">
               <span className="mb-1.5 block text-sm font-medium text-slate-700">密码</span>
-              <input
-                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
+              <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
             </label>
             {error ? <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-            <button className={`${primaryButtonClass} w-full`} onClick={login}>
-              进入演示工作台
-            </button>
+            <button className={`${primaryButtonClass} w-full`} onClick={login}>进入演示工作台</button>
             <button
               className={`${secondaryButtonClass} w-full`}
               onClick={() => {
@@ -86,15 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <AppNav />
           <div className="mt-auto px-3 pb-4">
-            <button
-              className={`${secondaryButtonClass} w-full`}
-              onClick={() => {
-                setDemoAuthed(false);
-                setAuthed(false);
-              }}
-            >
-              退出登录
-            </button>
+            <button className={`${secondaryButtonClass} w-full`} onClick={() => setDemoAuthed(false)}>退出登录</button>
           </div>
         </div>
       </aside>

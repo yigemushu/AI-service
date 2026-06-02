@@ -1,11 +1,11 @@
 export function formatQuantity(quantity?: string, unit?: string) {
-  const safeQuantity = quantity || "\u5f85\u786e\u8ba4";
+  const safeQuantity = quantity || "待确认";
   if (!unit) return safeQuantity;
   return /^[a-zA-Z]+$/.test(unit) ? `${safeQuantity} ${unit}` : `${safeQuantity}${unit}`;
 }
 
 export function formatItemSummary(items: Array<{ name: string; quantity?: string; unit?: string }>) {
-  return items.map((item) => `${item.name} x${formatQuantity(item.quantity, item.unit)}`).join("\u3001");
+  return items.map((item) => `${item.name} x${formatQuantity(item.quantity, item.unit)}`).join("、");
 }
 
 export function repairLegacyItemSummary(summary?: string) {

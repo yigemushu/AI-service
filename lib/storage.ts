@@ -1,11 +1,12 @@
 "use client";
 
 import { defaultSettings } from "./constants";
-import type { MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
+import type { EvaluationRun, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
 
 const keys = {
   orders: "ai-service.orders",
   optimization: "ai-service.optimization",
+  evaluationRuns: "ai-service.evaluation-runs",
   settings: "ai-service.settings",
   templates: "ai-service.templates",
   demoAuth: "ai-service.demo-auth",
@@ -50,6 +51,16 @@ export function getOptimizationRecords() {
 
 export function saveOptimizationRecords(records: OptimizationRecord[]) {
   writeJson(keys.optimization, records);
+  window.dispatchEvent(new Event("optimization-updated"));
+}
+
+export function getEvaluationRuns() {
+  return readJson<EvaluationRun[]>(keys.evaluationRuns, []);
+}
+
+export function saveEvaluationRuns(runs: EvaluationRun[]) {
+  writeJson(keys.evaluationRuns, runs);
+  window.dispatchEvent(new Event("evaluation-runs-updated"));
 }
 
 export function getSettings() {

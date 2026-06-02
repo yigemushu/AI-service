@@ -5,12 +5,12 @@ import { useEffect, useState } from "react";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { StatsCards } from "@/components/StatsCards";
-import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
+import { primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
 import { businessGuides, businessTypeLabels, defaultTemplates } from "@/lib/constants";
 import { formatItemSummary, formatQuantity } from "@/lib/format";
 import { calculateStats, inferIntentLevel, mapOrderStatus } from "@/lib/orderUtils";
 import { createId, getOrders, getSettings, getTemplates, saveOrders, saveTemplates } from "@/lib/storage";
-import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, MessageTemplate, Order } from "@/lib/types";
+import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, Order } from "@/lib/types";
 
 const samples: Record<BusinessType, string> = {
   sam: "想要一个牛肉卷一个鸡胸肉，送青秀区，今天下午能到吗？",
@@ -18,6 +18,10 @@ const samples: Record<BusinessType, string> = {
   local: "我想约明天下午上门清洗空调，青秀区，大概多少钱？",
   trade: "Hi, we need 500 pieces of stainless steel water bottles. Can you quote FOB price and delivery time to Malaysia?",
 };
+
+function safeArray<T>(value: T[] | undefined | null): T[] {
+  return Array.isArray(value) ? value : [];
+}
 
 export default function WorkbenchPage() {
   const [chatText, setChatText] = useState(samples.sam);
@@ -59,20 +63,14 @@ export default function WorkbenchPage() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chatText,
-          businessType,
-          systemPrompt: settings.systemPrompt,
-          sellerRules: settings.merchantRules,
-          enabledTemplates,
-        }),
+        body: JSON.stringify({ chatText, businessType, systemPrompt: settings.systemPrompt, sellerRules: settings.merchantRules, enabledTemplates }),
       });
       const data = (await response.json()) as AnalyzeApiResponse;
-      if (!response.ok || data.error) throw new Error(data.error || "AI 分析失败，请稍后重试或使用 mock 模式");
+      if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
       setResult(mapAnalyzeResponse(data));
     } catch {
       setResult(null);
-      setMessage("AI 分析失败，请稍后重试或使用 mock 模式");
+      setMessage("AI 分析失败，请检查 API Key、模型或终端日志。");
     } finally {
       setLoading(false);
     }
@@ -80,37 +78,15 @@ export default function WorkbenchPage() {
 
   async function copyReply() {
     const reply = result?.reply || "";
-    if (!reply.trim()) {
-      setMessage("暂无可复制内容");
-      return;
-    }
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(reply);
-      else fallbackCopy(reply);
-      setMessage("已复制");
-    } catch {
-      try {
-        fallbackCopy(reply);
-        setMessage("已复制");
-      } catch {
-        setMessage("复制失败，请手动复制");
-      }
-    }
+    if (!reply.trim()) return setMessage("暂无可复制内容");
+    await navigator.clipboard?.writeText(reply);
+    setMessage("已复制");
   }
 
   function saveOrder() {
     if (!result) return;
-    const orders = getOrders();
     const now = new Date();
-    const duplicate = orders.some((order) => {
-      const createdAt = new Date(order.createdAt || order.updatedAt).getTime();
-      return order.customerName === result.customerName && order.summary === result.summary && now.getTime() - createdAt <= 10 * 60 * 1000;
-    });
-    if (duplicate && !window.confirm("可能是重复订单，是否继续保存？")) {
-      setMessage("已取消保存");
-      return;
-    }
-    const missingInfo = result.missingInfo || [];
+    const missingInfo = safeArray(result.missingInfo);
     const itemSummary = formatItemSummary(result.products);
     const order: Order = {
       id: createId("order"),
@@ -128,7 +104,7 @@ export default function WorkbenchPage() {
       rawMessage: chatText,
       analysis: result,
     };
-    saveOrders([order, ...orders]);
+    saveOrders([order, ...getOrders()]);
     setMessage("订单已保存");
   }
 
@@ -140,19 +116,12 @@ export default function WorkbenchPage() {
       </header>
 
       <StatsCards stats={stats} />
-
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{message}</div> : null}
 
       <Section title="业务类型" description={businessGuides[businessType]}>
         <div className="grid gap-2 sm:grid-cols-4">
           {(Object.keys(businessTypeLabels) as BusinessType[]).map((type) => (
-            <button
-              key={type}
-              className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-                businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-              onClick={() => changeBusinessType(type)}
-            >
+            <button key={type} className={`rounded-md border px-3 py-2 text-sm font-semibold ${businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`} onClick={() => changeBusinessType(type)}>
               {businessTypeLabels[type]}
             </button>
           ))}
@@ -178,12 +147,10 @@ export default function WorkbenchPage() {
               <div>
                 <div className="mb-2 text-sm font-semibold text-slate-800">商品/服务列表</div>
                 <div className="space-y-2">
-                  {result.products.map((product, index) => (
+                  {safeArray(result.products).map((product, index) => (
                     <div key={`${product.name}-${index}`} className="rounded-md border border-slate-200 p-3 text-sm">
                       <div className="font-medium text-slate-950">{product.name}</div>
                       <div className="mt-1 text-slate-600">数量：{formatQuantity(product.quantity, product.unit)}</div>
-                      {product.confidence ? <div className="mt-1 text-slate-500">置信度：{product.confidence}</div> : null}
-                      {product.notes ? <div className="mt-1 text-slate-500">{product.notes}</div> : null}
                     </div>
                   ))}
                 </div>
@@ -195,13 +162,11 @@ export default function WorkbenchPage() {
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 <button className={secondaryButtonClass} onClick={copyReply} disabled={!result.reply?.trim()}>一键复制回复</button>
                 <button className={primaryButtonClass} onClick={saveOrder}>保存为订单</button>
-                {message === "订单已保存" ? <Link className={secondaryButtonClass} href="/orders">查看订单</Link> : null}
+                <Link className={secondaryButtonClass} href="/orders">查看订单</Link>
               </div>
             </div>
           ) : (
-            <div className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">
-              生成后会在这里展示客户诉求、商品/服务、缺失信息、风险点、下一步动作和回复话术。
-            </div>
+            <div className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">生成后会在这里展示分析结果。</div>
           )}
         </Section>
       </div>
@@ -213,38 +178,17 @@ function mapAnalyzeResponse(data: AnalyzeApiResponse): AnalyzeResult {
   const confidenceMap = { high: "高", medium: "中", low: "低" } as const;
   return {
     customerIntent: data.customer_intent,
-    products: data.items.map((item) => ({
-      name: item.name,
-      quantity: item.quantity,
-      unit: item.unit,
-      notes: item.note,
-      confidence: confidenceMap[item.confidence],
-    })),
-    missingInfo: data.missing_info,
-    risks: data.risk_flags,
-    nextActions: data.next_action,
+    products: safeArray(data.items).map((item) => ({ name: item.name, quantity: item.quantity, unit: item.unit, notes: item.note, confidence: confidenceMap[item.confidence] })),
+    missingInfo: safeArray(data.missing_info),
+    risks: safeArray(data.risk_flags),
+    nextActions: safeArray(data.next_action),
     reply: data.reply,
     summary: data.summary,
-    customerName: data.customer_info.name || "待填写客户",
-    platform: data.customer_info.platform || "未识别",
+    customerName: data.customer_info?.name || "待填写客户",
+    platform: data.customer_info?.platform || "未识别",
     orderStatus: data.order_status,
     urgency: data.urgency,
   };
-}
-
-function fallbackCopy(text: string) {
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  const success = document.execCommand("copy");
-  document.body.removeChild(textarea);
-  if (!success) throw new Error("copy failed");
 }
 
 function OutputBlock({ title, content, strong = false }: { title: string; content: string; strong?: boolean }) {
@@ -261,7 +205,7 @@ function ListBlock({ title, items, empty = "暂无" }: { title: string; items: s
     <div>
       <div className="mb-2 text-sm font-semibold text-slate-800">{title}</div>
       <ul className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-        {(items.length ? items : [empty]).map((item) => <li key={item}>{item}</li>)}
+        {(safeArray(items).length ? items : [empty]).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
       </ul>
     </div>
   );

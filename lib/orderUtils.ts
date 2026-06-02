@@ -30,9 +30,7 @@ export function inferIntentLevel(urgency?: string, missingInfo: string[] = []): 
 }
 
 export function mapOrderStatus(value?: string, missingInfo: string[] = []): OrderStatus {
-  if (value && ["待补充", "待确认", "待报价", "待下单", "处理中", "售后中", "已完成", "已取消"].includes(value)) {
-    return value as OrderStatus;
-  }
+  if (value && ["待补充", "待确认", "待报价", "待下单", "处理中", "售后中", "已完成", "已取消"].includes(value)) return value as OrderStatus;
   if (missingInfo.length > 0) return "待补充";
   return "待确认";
 }
@@ -55,20 +53,12 @@ export function calculateStats(orders: Order[]): OrderStats {
 
 export function matchesOrderFilters(
   order: Order,
-  filters: {
-    status: "all" | OrderStatus;
-    businessType: "all" | BusinessType;
-    intentLevel: "all" | IntentLevel;
-    keyword: string;
-  },
+  filters: { status: "all" | OrderStatus; businessType: "all" | BusinessType; intentLevel: "all" | IntentLevel; keyword: string },
 ) {
   const keyword = filters.keyword.trim().toLowerCase();
   if (filters.status !== "all" && order.status !== filters.status) return false;
   if (filters.businessType !== "all" && order.businessType !== filters.businessType) return false;
   if (filters.intentLevel !== "all" && order.intentLevel !== filters.intentLevel) return false;
   if (!keyword) return true;
-  return [order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage]
-    .join(" ")
-    .toLowerCase()
-    .includes(keyword);
+  return [order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage].join(" ").toLowerCase().includes(keyword);
 }

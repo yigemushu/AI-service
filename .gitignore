@@ -2,23 +2,15 @@
 Thumbs.db
 desktop.ini
 
-# Editor files
-.vscode/
-.idea/
-*.swp
-*.tmp
-
-# Local environment
 .env
 .env.local
 .env*.local
 
-# Generated output
 .next/
 dist/
 build/
 node_modules/
-__pycache__/
 *.log
 *.tsbuildinfo
-.playwright-cli/
+.npm-cache/
+AI-service-v0.3-sync-patch.ps1
