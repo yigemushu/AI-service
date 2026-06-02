@@ -7,9 +7,11 @@ import { getOrders } from "@/lib/storage";
 const navItems: Array<{ href: string; label: string; badge?: "newOrders" }> = [
   { href: "/", label: "工作台" },
   { href: "/orders", label: "客户订单", badge: "newOrders" },
+  { href: "/knowledge", label: "商家知识库" },
   { href: "/evaluation", label: "样本压测" },
   { href: "/templates", label: "话术模板" },
   { href: "/optimization", label: "优化中心" },
+  { href: "/feedback", label: "外测反馈" },
   { href: "/settings", label: "设置" },
 ] as const;
 

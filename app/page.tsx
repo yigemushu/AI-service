@@ -6,10 +6,10 @@ import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { StatsCards } from "@/components/StatsCards";
 import { primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
-import { businessGuides, businessTypeLabels, defaultTemplates } from "@/lib/constants";
+import { businessGuides, businessTypeLabels, defaultKnowledgeRules, defaultTemplates } from "@/lib/constants";
 import { formatItemSummary, formatQuantity } from "@/lib/format";
 import { calculateStats, inferIntentLevel, mapOrderStatus } from "@/lib/orderUtils";
-import { createId, getOrders, getSettings, getTemplates, saveOrders, saveTemplates } from "@/lib/storage";
+import { createId, getKnowledgeRules, getOrders, getSettings, getTemplates, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, Order } from "@/lib/types";
 
 const samples: Record<BusinessType, string> = {
@@ -27,6 +27,7 @@ export default function WorkbenchPage() {
   const [chatText, setChatText] = useState(samples.sam);
   const [businessType, setBusinessType] = useState<BusinessType>("sam");
   const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [quickReply, setQuickReply] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [stats, setStats] = useState(calculateStats([]));
@@ -42,6 +43,7 @@ export default function WorkbenchPage() {
     setBusinessType(value);
     setChatText(samples[value]);
     setResult(null);
+    setQuickReply("");
     setMessage("");
   }
 
@@ -52,25 +54,37 @@ export default function WorkbenchPage() {
     return defaultTemplates;
   }
 
+  function ensureKnowledgeRules() {
+    const existing = getKnowledgeRules();
+    if (existing.length > 0) return existing;
+    saveKnowledgeRules(defaultKnowledgeRules);
+    return defaultKnowledgeRules;
+  }
+
   async function analyze() {
     setLoading(true);
     setMessage("");
+    setQuickReply(buildQuickReply(chatText, businessType));
     try {
       const settings = getSettings();
       const enabledTemplates = ensureTemplates()
         .filter((template) => template.enabled && template.businessType === businessType)
         .map(({ name, scenario, content }) => ({ name, scenario, content }));
+      const knowledgeRules = ensureKnowledgeRules()
+        .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === businessType))
+        .map(({ title, category, content }) => ({ title, category, content }));
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatText, businessType, systemPrompt: settings.systemPrompt, sellerRules: settings.merchantRules, enabledTemplates }),
+        body: JSON.stringify({ chatText, businessType, systemPrompt: settings.systemPrompt, sellerRules: settings.merchantRules, enabledTemplates, knowledgeRules, responseMode: "fast" }),
       });
       const data = (await response.json()) as AnalyzeApiResponse;
       if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
       setResult(mapAnalyzeResponse(data));
+      setQuickReply("");
     } catch {
       setResult(null);
-      setMessage("AI 分析失败，请检查 API Key、模型或终端日志。");
+      setMessage("AI 分析失败，请稍后重试或使用 mock 模式");
     } finally {
       setLoading(false);
     }
@@ -79,8 +93,14 @@ export default function WorkbenchPage() {
   async function copyReply() {
     const reply = result?.reply || "";
     if (!reply.trim()) return setMessage("暂无可复制内容");
-    await navigator.clipboard?.writeText(reply);
-    setMessage("已复制");
+    const copied = await copyText(reply);
+    setMessage(copied ? "已复制" : "复制失败，请手动复制");
+  }
+
+  async function copyQuickReply() {
+    if (!quickReply.trim()) return setMessage("暂无可复制内容");
+    const copied = await copyText(quickReply);
+    setMessage(copied ? "已复制快速回复" : "复制失败，请手动复制");
   }
 
   function saveOrder() {
@@ -165,6 +185,15 @@ export default function WorkbenchPage() {
                 <Link className={secondaryButtonClass} href="/orders">查看订单</Link>
               </div>
             </div>
+          ) : quickReply ? (
+            <div className="space-y-3">
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <div className="font-semibold text-amber-950">快速回复草稿</div>
+                <p className="mt-2 whitespace-pre-line">{quickReply}</p>
+                <p className="mt-2 text-xs text-amber-700">AI 正在继续分析完整订单信息，必要时可以先复制这段回复安抚客户。</p>
+              </div>
+              <button className={secondaryButtonClass} onClick={copyQuickReply}>先复制快速回复</button>
+            </div>
           ) : (
             <div className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">生成后会在这里展示分析结果。</div>
           )}
@@ -189,6 +218,43 @@ function mapAnalyzeResponse(data: AnalyzeApiResponse): AnalyzeResult {
     orderStatus: data.order_status,
     urgency: data.urgency,
   };
+}
+
+async function copyText(text: string) {
+  if (!text.trim()) return false;
+  try {
+    await navigator.clipboard?.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function buildQuickReply(chatText: string, businessType: BusinessType) {
+  if (!chatText.trim()) return "";
+  if (businessType === "trade") {
+    return "Thank you for your inquiry. I will check the product details, quantity, destination, pricing terms, and delivery schedule first, then get back to you with a clear quotation draft.";
+  }
+  if (businessType === "xianyu") {
+    return "收到，我先帮您核对一下价格、是否包邮、商品状态和发货时间，确认后马上回复您。";
+  }
+  if (businessType === "local") {
+    return "收到，我先帮您确认上门时间、服务地址、服务内容和报价规则，确认后马上给您准确回复。";
+  }
+  return "收到，我先帮您核对商品、数量、地址、配送时间、库存和价格，确认后马上回复您。";
 }
 
 function OutputBlock({ title, content, strong = false }: { title: string; content: string; strong?: boolean }) {

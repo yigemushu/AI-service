@@ -1,7 +1,7 @@
 "use client";
 
 import { defaultSettings } from "./constants";
-import type { EvaluationRun, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
+import type { EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
 
 const keys = {
   orders: "ai-service.orders",
@@ -9,6 +9,8 @@ const keys = {
   evaluationRuns: "ai-service.evaluation-runs",
   settings: "ai-service.settings",
   templates: "ai-service.templates",
+  knowledgeRules: "ai-service.knowledge-rules",
+  feedback: "ai-service.feedback",
   demoAuth: "ai-service.demo-auth",
 };
 
@@ -45,6 +47,15 @@ export function saveTemplates(templates: MessageTemplate[]) {
   window.dispatchEvent(new Event("templates-updated"));
 }
 
+export function getKnowledgeRules() {
+  return readJson<KnowledgeRule[]>(keys.knowledgeRules, []);
+}
+
+export function saveKnowledgeRules(rules: KnowledgeRule[]) {
+  writeJson(keys.knowledgeRules, rules);
+  window.dispatchEvent(new Event("knowledge-updated"));
+}
+
 export function getOptimizationRecords() {
   return readJson<OptimizationRecord[]>(keys.optimization, []);
 }
@@ -61,6 +72,14 @@ export function getEvaluationRuns() {
 export function saveEvaluationRuns(runs: EvaluationRun[]) {
   writeJson(keys.evaluationRuns, runs);
   window.dispatchEvent(new Event("evaluation-runs-updated"));
+}
+
+export function getFeedbackRecords() {
+  return readJson<FeedbackRecord[]>(keys.feedback, []);
+}
+
+export function saveFeedbackRecords(records: FeedbackRecord[]) {
+  writeJson(keys.feedback, records);
 }
 
 export function getSettings() {

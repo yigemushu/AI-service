@@ -13,6 +13,7 @@ import type { IntentLevel, Order, OrderStatus } from "@/lib/types";
 
 export default function OrderDetailPage({ params }: { params: { id: string } }) {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [message, setMessage] = useState("");
   const order = useMemo(() => orders.find((item) => item.id === params.id), [orders, params.id]);
 
   useEffect(() => {
@@ -26,6 +27,13 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
     const next = orders.map((item) => (item.id === params.id ? { ...item, ...patch, isNew: false, updatedAt: new Date().toISOString() } : item));
     setOrders(next);
     saveOrders(next);
+  }
+
+  async function copyReply() {
+    const reply = order?.analysis?.reply || "";
+    if (!reply.trim()) return setMessage("暂无可复制内容");
+    const copied = await copyText(reply);
+    setMessage(copied ? "已复制推荐回复" : "复制失败，请手动复制");
   }
 
   if (!order) {
@@ -51,6 +59,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
         </div>
         <Link className={secondaryButtonClass} href="/orders">返回客户订单</Link>
       </header>
+      {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{message}</div> : null}
 
       <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
         <Section title="客户画像">
@@ -80,6 +89,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
           <InfoBlock title="客户诉求" content={order.analysis?.customerIntent || order.summary} />
           <InfoBlock title="商品/服务" content={itemSummary || "待确认"} />
           <InfoBlock title="推荐回复草稿" content={order.analysis?.reply || "暂无"} strong />
+          <button className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
         </Section>
       </div>
 
@@ -94,6 +104,29 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
       </Section>
     </div>
   );
+}
+
+async function copyText(text: string) {
+  if (!text.trim()) return false;
+  try {
+    await navigator.clipboard?.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return copied;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function InfoBlock({ title, content, strong = false }: { title: string; content: string; strong?: boolean }) {

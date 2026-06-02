@@ -7,7 +7,9 @@ type AnalyzeRequest = {
   businessType?: BusinessType;
   sellerRules?: string;
   systemPrompt?: string;
+  responseMode?: "fast" | "full";
   enabledTemplates?: Array<{ name: string; scenario: string; content: string }>;
+  knowledgeRules?: Array<{ title: string; category: string; content: string }>;
 };
 
 type AnalyzeApiItem = {
@@ -171,12 +173,17 @@ function mockAnalyze(input: AnalyzeRequest): AnalyzeApiResponse {
 function buildPrompt(input: AnalyzeRequest) {
   const businessType = input.businessType || "sam";
   const templates = input.enabledTemplates?.length ? input.enabledTemplates.map((tpl) => `- ${tpl.name}（${tpl.scenario}）：${tpl.content}`).join("\n") : "暂无启用模板";
+  const knowledgeRules = input.knowledgeRules?.length
+    ? input.knowledgeRules.map((rule) => `- ${rule.title}（${rule.category}）：${rule.content}`).join("\n")
+    : "暂无知识库规则";
   return [
     input.systemPrompt || "你是一个谨慎的 AI 客服订单助手，只生成客服回复草稿，不自动发送任何消息。",
     "",
     `业务类型：${businessTypeLabels[businessType]}`,
     `业务关注点：${businessGuides[businessType]}`,
     `商家规则：${input.sellerRules || "暂无"}`,
+    "商家知识库规则：",
+    knowledgeRules,
     "启用话术模板：",
     templates,
     "",
@@ -202,11 +209,27 @@ function readOutputText(response: unknown) {
 async function analyzeWithOpenAI(input: AnalyzeRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return mockAnalyze(input);
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const model = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || "18000");
+  const maxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, input: [{ role: "user", content: buildPrompt(input) }], text: { format: { type: "json_schema", name: "customer_order_analysis", strict: true, schema: analyzeSchema } } }),
+    signal: AbortSignal.timeout(timeoutMs),
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "system",
+          content: "You are a fast customer-service order assistant. Extract facts and draft a reply. Return only valid JSON that matches the schema.",
+        },
+        { role: "user", content: buildPrompt(input) },
+      ],
+      text: { format: { type: "json_schema", name: "customer_order_analysis", strict: true, schema: analyzeSchema } },
+      max_output_tokens: maxOutputTokens,
+      temperature: 0.2,
+      store: false,
+    }),
   });
   if (!response.ok) throw new Error(`OpenAI request failed: ${response.status} ${await response.text()}`);
   const outputText = readOutputText(await response.json());

@@ -62,6 +62,28 @@ export type MessageTemplate = {
   updatedAt: string;
 };
 
+export type KnowledgeRule = {
+  id: string;
+  title: string;
+  businessType: BusinessType | "all";
+  category: "商品库存" | "价格报价" | "配送履约" | "售后退款" | "话术禁区" | "其他";
+  content: string;
+  enabled: boolean;
+  updatedAt: string;
+};
+
+export type FeedbackRecord = {
+  id: string;
+  testerName: string;
+  role: string;
+  scenario: string;
+  rating: number;
+  willingnessToPay: "愿意付费" | "再观望" | "暂不愿意";
+  feedback: string;
+  contact: string;
+  createdAt: string;
+};
+
 export type OptimizationRecord = {
   id: string;
   source?: "manual" | "evaluation";

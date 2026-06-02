@@ -1,4 +1,4 @@
-import type { BusinessType, MessageTemplate, OrderStatus, Settings } from "./types";
+import type { BusinessType, KnowledgeRule, MessageTemplate, OrderStatus, Settings } from "./types";
 
 export const businessTypeLabels: Record<BusinessType, string> = {
   sam: "山姆代下单",
@@ -22,6 +22,45 @@ export const defaultSettings: Settings = {
 };
 
 const now = "2026-05-28T00:00:00.000Z";
+
+export const defaultKnowledgeRules: KnowledgeRule[] = [
+  {
+    id: "rule_stock_confirm",
+    title: "库存与时效必须二次确认",
+    businessType: "sam",
+    category: "商品库存",
+    content: "山姆商品、库存、价格和配送时间均以人工确认结果为准，回复中不要承诺一定有货或一定送达。",
+    enabled: true,
+    updatedAt: now,
+  },
+  {
+    id: "rule_xianyu_price",
+    title: "闲鱼议价底线",
+    businessType: "xianyu",
+    category: "价格报价",
+    content: "遇到砍价、包邮、催发货，先确认商品成色、收货地和发货方式，不承诺最低价。",
+    enabled: true,
+    updatedAt: now,
+  },
+  {
+    id: "rule_local_booking",
+    title: "本地服务预约前置条件",
+    businessType: "local",
+    category: "配送履约",
+    content: "上门服务需要确认服务地址、楼层/停车、预约时间、服务范围和联系方式后再报价。",
+    enabled: true,
+    updatedAt: now,
+  },
+  {
+    id: "rule_trade_quote",
+    title: "外贸报价信息",
+    businessType: "trade",
+    category: "价格报价",
+    content: "外贸询盘回复需确认产品规格、数量、目的国家、贸易条款、MOQ、交期，正式报价前不要给最终价格。",
+    enabled: true,
+    updatedAt: now,
+  },
+];
 
 export const defaultTemplates: MessageTemplate[] = [
   { id: "tpl_sam_missing", name: "信息补全", businessType: "sam", scenario: "缺少地址、电话、时间或规格", content: "可以的哦，我先帮你看一下。\n\n麻烦你发我一下详细地址、电话和期望送达时间，我确认下今天能不能安排、以及现在有没有货~", enabled: true, createdAt: now, updatedAt: now },
