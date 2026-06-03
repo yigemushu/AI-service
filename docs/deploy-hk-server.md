@@ -165,21 +165,52 @@ sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d your-domain.com
 ```
 
-## 9. 更新部署
+## 9. 后续更新流程
+
+所有代码改动都应该先在本地或协作者电脑上开发，通过 GitHub 同步到服务器。不要在服务器上直接修改项目代码，否则下一次 `git pull` 很容易产生冲突或覆盖。
+
+推荐流程：
+
+1. 在开发分支 `dev` 完成功能开发和测试。
+2. 确认 `dev` 通过 `npm run lint` 和 `npm run build`。
+3. 将 `dev` 合并到 `main`。
+4. 推送 `main` 到 GitHub。
+5. 登录香港轻量服务器。
+6. 进入项目目录并更新部署。
+
+服务器上执行：
 
 ```bash
 cd /var/www/AI-service
 git pull origin main
 npm ci
-npm run lint
 npm run build
 pm2 restart ai-service
 ```
 
-如果外测部署的是 `dev`：
+更新后检查：
 
 ```bash
-git pull origin dev
+pm2 status
+pm2 logs ai-service
+curl http://localhost:3000/api/health
+```
+
+如果更新失败，可以先回滚到上一个稳定 commit：
+
+```bash
+git log --oneline -5
+git checkout 上一个commit
+npm ci
+npm run build
+pm2 restart ai-service
+```
+
+回滚后如果需要重新回到线上分支：
+
+```bash
+git checkout main
+git pull origin main
 ```
 
 ## 10. 常用排查
