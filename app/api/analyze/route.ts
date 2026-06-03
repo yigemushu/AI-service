@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { callAiProvider } from "@/lib/aiProvider";
 import { businessGuides, businessTypeLabels } from "@/lib/constants";
 import type { BusinessType } from "@/lib/types";
 
@@ -200,40 +201,8 @@ function buildPrompt(input: AnalyzeRequest) {
   ].join("\n");
 }
 
-function readOutputText(response: unknown) {
-  const data = response as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
-  if (data.output_text) return data.output_text;
-  return data.output?.flatMap((item) => item.content || []).map((content) => content.text || "").join("") || "";
-}
-
 async function analyzeWithOpenAI(input: AnalyzeRequest) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return mockAnalyze(input);
-  const model = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
-  const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || "18000");
-  const maxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "system",
-          content: "You are a fast customer-service order assistant. Extract facts and draft a reply. Return only valid JSON that matches the schema.",
-        },
-        { role: "user", content: buildPrompt(input) },
-      ],
-      text: { format: { type: "json_schema", name: "customer_order_analysis", strict: true, schema: analyzeSchema } },
-      max_output_tokens: maxOutputTokens,
-      temperature: 0.2,
-      store: false,
-    }),
-  });
-  if (!response.ok) throw new Error(`OpenAI request failed: ${response.status} ${await response.text()}`);
-  const outputText = readOutputText(await response.json());
-  if (!outputText) throw new Error("OpenAI returned empty output");
+  const outputText = await callAiProvider({ prompt: buildPrompt(input), responseMode: input.responseMode, schema: analyzeSchema });
   return JSON.parse(outputText) as AnalyzeApiResponse;
 }
 
