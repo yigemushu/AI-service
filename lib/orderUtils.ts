@@ -9,6 +9,10 @@ export type OrderStats = {
   afterSales: number;
 };
 
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
 export function normalizeOrder(order: Order): Order {
   const createdAt = order.createdAt || order.updatedAt || new Date().toISOString();
   const products = order.analysis?.products || [];
@@ -55,10 +59,14 @@ export function matchesOrderFilters(
   order: Order,
   filters: { status: "all" | OrderStatus; businessType: "all" | BusinessType; intentLevel: "all" | IntentLevel; keyword: string },
 ) {
-  const keyword = filters.keyword.trim().toLowerCase();
+  const keyword = safeString(filters.keyword).trim().toLowerCase();
   if (filters.status !== "all" && order.status !== filters.status) return false;
   if (filters.businessType !== "all" && order.businessType !== filters.businessType) return false;
   if (filters.intentLevel !== "all" && order.intentLevel !== filters.intentLevel) return false;
   if (!keyword) return true;
-  return [order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage].join(" ").toLowerCase().includes(keyword);
+  return [order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage]
+    .map(safeString)
+    .join(" ")
+    .toLowerCase()
+    .includes(keyword);
 }

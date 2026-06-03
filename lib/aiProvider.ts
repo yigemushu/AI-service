@@ -19,8 +19,12 @@ function normalizeBaseUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
 function getProvider() {
-  const raw = (process.env.AI_PROVIDER || "openai").toLowerCase();
+  const raw = safeString(process.env.AI_PROVIDER || "openai").toLowerCase();
   return raw === "openai-compatible" ? "openai-compatible" : "openai";
 }
 

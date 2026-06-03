@@ -152,8 +152,9 @@ export const evaluationSamples: EvaluationSample[] = [
   { id: "edge-trade-10", businessType: "trade", sampleGroup: "刁钻", title: "外贸刁钻-质检不合格", message: "Last container had 4% defective zippers. For next 8,000 backpacks, what compensation and QC plan?", expected: { itemKeywords: ["backpacks", "zippers"], quantityKeywords: ["8000", "4"], addressOrTimeKeywords: [], missingKeywords: ["destination", "trade terms"], riskKeywords: ["defective", "QC"], status: "售后中" } },
 ];
 
-function normalize(value: string) {
-  return value.toLowerCase().replace(/\s+/g, "");
+function normalize(value: unknown) {
+  const safe = typeof value === "string" ? value : String(value ?? "");
+  return safe.toLowerCase().replace(/\s+/g, "");
 }
 
 function includesAny(text: string, keywords: string[]) {

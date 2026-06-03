@@ -207,17 +207,20 @@ async function analyzeWithOpenAI(input: AnalyzeRequest) {
 }
 
 function normalizeItems(items: AnalyzeApiItem[]) {
-  return (items || []).map((item) => {
-    const unit = item.unit || "";
-    let quantity = item.quantity || "";
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const name = String(item?.name || "");
+    const unit = String(item?.unit || "");
+    let quantity = String(item?.quantity || "");
+    const note = String(item?.note || "");
+    const confidence = ["high", "medium", "low"].includes(String(item?.confidence)) ? item.confidence : "medium";
     if (unit && quantity.toLowerCase().endsWith(unit.toLowerCase())) quantity = quantity.slice(0, -unit.length).trim();
-    return { ...item, quantity, unit };
-  });
+    return { name, quantity, unit, note, confidence } as AnalyzeApiItem;
+  }).filter((item) => item.name.trim());
 }
 
 function mergeItems(primary: AnalyzeApiItem[], fallback: AnalyzeApiItem[]) {
   const items = [...normalizeItems(primary)];
-  for (const item of fallback) {
+  for (const item of normalizeItems(fallback)) {
     const name = item.name.toLowerCase();
     if (!items.some((existing) => existing.name.toLowerCase().includes(name) || name.includes(existing.name.toLowerCase()))) {
       items.push(item);
@@ -228,6 +231,11 @@ function mergeItems(primary: AnalyzeApiItem[], fallback: AnalyzeApiItem[]) {
 
 function addUnique(list: string[], value: string) {
   if (value && !list.some((item) => item.includes(value) || value.includes(item))) list.push(value);
+}
+
+function normalizeStringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 function buildWarmReply(businessType: BusinessType, itemText: string, missingInfo: string[]) {
@@ -314,8 +322,8 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
   const text = input.chatText || "";
   const businessType = input.businessType || "sam";
   const items = mergeItems(result.items || [], extractMockItems(text, businessType));
-  const missingInfo = enrichMissingInfo(result.missing_info || [], text, businessType);
-  const riskFlags = new Set(result.risk_flags || []);
+  const missingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
+  const riskFlags = new Set(normalizeStringList(result.risk_flags));
   if (items.length > 0) riskFlags.add("库存、价格和履约时效需确认后再回复，不应直接承诺。");
   if (/便宜|最低价|砍价|包邮/.test(text)) riskFlags.add("客户正在议价或确认包邮，需要按商家规则确认价格。");
   if (/今天|明天|上午|下午|急|delivery time/i.test(text)) riskFlags.add("客户有时效要求，需要确认库存、服务档期或配送能力。");
@@ -325,16 +333,26 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
   if (/异味|重新上门|昨天清洗|返工/.test(text)) riskFlags.add("本地服务售后需确认原订单、问题证据和是否需要返工。");
   if (/broken|quality|solve|last shipment|handles/i.test(text)) riskFlags.add("外贸售后需确认质量问题证据、订单号、数量和补救方案。");
   if (missingInfo.length > 0) riskFlags.add(`仍缺少关键信息：${missingInfo.join("、")}。`);
-  const address = result.customer_info?.address || extractMentionedAddress(text, businessType);
-  const preferredTime = result.customer_info?.preferred_time || extractMentionedTime(text);
+  const customerInfo = result.customer_info || { name: "", platform: "", address: "", phone: "", preferred_time: "" };
+  const address = String(customerInfo.address || "") || extractMentionedAddress(text, businessType);
+  const preferredTime = String(customerInfo.preferred_time || "") || extractMentionedTime(text);
   return {
     ...result,
+    summary: String(result.summary || ""),
+    customer_intent: String(result.customer_intent || ""),
     items,
-    customer_info: { ...result.customer_info, address, preferred_time: preferredTime },
+    customer_info: {
+      name: String(customerInfo.name || "待填写客户"),
+      platform: String(customerInfo.platform || pickPlatform(text, businessType)),
+      address,
+      phone: String(customerInfo.phone || ""),
+      preferred_time: preferredTime,
+    },
     missing_info: missingInfo,
     order_status: inferStableStatus(text, businessType, missingInfo),
     risk_flags: Array.from(riskFlags),
-    reply: sanitizeReply(result.reply),
+    next_action: normalizeStringList(result.next_action),
+    reply: sanitizeReply(String(result.reply || "")),
   };
 }
 
