@@ -23,8 +23,12 @@ function safeString(value: unknown) {
   return typeof value === "string" ? value : String(value ?? "");
 }
 
+function safeLower(value: unknown) {
+  return safeString(value).toLowerCase();
+}
+
 function getProvider() {
-  const raw = safeString(process.env.AI_PROVIDER || "openai").toLowerCase();
+  const raw = safeLower(process.env.AI_PROVIDER || "openai");
   return raw === "openai-compatible" ? "openai-compatible" : "openai";
 }
 

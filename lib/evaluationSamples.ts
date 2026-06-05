@@ -154,7 +154,12 @@ export const evaluationSamples: EvaluationSample[] = [
 
 function normalize(value: unknown) {
   const safe = typeof value === "string" ? value : String(value ?? "");
-  return safe.toLowerCase().replace(/\s+/g, "");
+  return safeLower(safe).replace(/\s+/g, "");
+}
+
+function safeLower(value: unknown) {
+  const safe = typeof value === "string" ? value : String(value ?? "");
+  return safe.toLowerCase();
 }
 
 function includesAny(text: string, keywords: string[]) {

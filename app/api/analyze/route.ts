@@ -213,7 +213,7 @@ function normalizeItems(items: AnalyzeApiItem[]) {
     let quantity = String(item?.quantity || "");
     const note = String(item?.note || "");
     const confidence = ["high", "medium", "low"].includes(String(item?.confidence)) ? item.confidence : "medium";
-    if (unit && quantity.toLowerCase().endsWith(unit.toLowerCase())) quantity = quantity.slice(0, -unit.length).trim();
+    if (unit && safeLower(quantity).endsWith(safeLower(unit))) quantity = quantity.slice(0, -unit.length).trim();
     return { name, quantity, unit, note, confidence } as AnalyzeApiItem;
   }).filter((item) => item.name.trim());
 }
@@ -221,8 +221,8 @@ function normalizeItems(items: AnalyzeApiItem[]) {
 function mergeItems(primary: AnalyzeApiItem[], fallback: AnalyzeApiItem[]) {
   const items = [...normalizeItems(primary)];
   for (const item of normalizeItems(fallback)) {
-    const name = item.name.toLowerCase();
-    if (!items.some((existing) => existing.name.toLowerCase().includes(name) || name.includes(existing.name.toLowerCase()))) {
+    const name = safeLower(item.name);
+    if (!items.some((existing) => safeLower(existing.name).includes(name) || name.includes(safeLower(existing.name)))) {
       items.push(item);
     }
   }
@@ -236,6 +236,11 @@ function addUnique(list: string[], value: string) {
 function normalizeStringList(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function safeLower(value: unknown) {
+  const safe = typeof value === "string" ? value : String(value ?? "");
+  return safe.toLowerCase();
 }
 
 function buildWarmReply(businessType: BusinessType, itemText: string, missingInfo: string[]) {
