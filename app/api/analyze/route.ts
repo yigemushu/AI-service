@@ -34,6 +34,38 @@ type AnalyzeApiResponse = {
   reply: string;
 };
 
+const businessTypes: BusinessType[] = ["sam", "xianyu", "local", "trade"];
+
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
+function normalizeAnalyzeRequest(value: unknown): AnalyzeRequest {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rawBusinessType = safeString(raw.businessType);
+  const businessType = businessTypes.includes(rawBusinessType as BusinessType) ? rawBusinessType as BusinessType : "sam";
+  const responseMode = raw.responseMode === "full" ? "full" : "fast";
+  const enabledTemplates = Array.isArray(raw.enabledTemplates)
+    ? raw.enabledTemplates
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({ name: safeString(item.name), scenario: safeString(item.scenario), content: safeString(item.content) }))
+    : [];
+  const knowledgeRules = Array.isArray(raw.knowledgeRules)
+    ? raw.knowledgeRules
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({ title: safeString(item.title), category: safeString(item.category), content: safeString(item.content) }))
+    : [];
+  return {
+    chatText: safeString(raw.chatText),
+    businessType,
+    sellerRules: safeString(raw.sellerRules),
+    systemPrompt: safeString(raw.systemPrompt),
+    responseMode,
+    enabledTemplates,
+    knowledgeRules,
+  };
+}
+
 const analyzeSchema = {
   type: "object",
   additionalProperties: false,
@@ -362,12 +394,37 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
 }
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
+  const startedAt = Date.now();
+  let stage = "request_parse";
   try {
-    const body = (await request.json()) as AnalyzeRequest;
+    const body = normalizeAnalyzeRequest(await request.json());
+    if (!body.chatText?.trim()) {
+      console.warn("[api/analyze] rejected", { requestId, status: 400, reason: "empty_chat_text" });
+      return NextResponse.json({ error: "聊天记录不能为空", requestId }, { status: 400 });
+    }
+    console.info("[api/analyze] started", {
+      requestId,
+      businessType: body.businessType,
+      chatLength: body.chatText.length,
+      templateCount: body.enabledTemplates?.length || 0,
+      knowledgeRuleCount: body.knowledgeRules?.length || 0,
+      provider: safeString(process.env.AI_PROVIDER || "openai"),
+    });
+    stage = "provider_call";
     const result = process.env.OPENAI_API_KEY ? await analyzeWithOpenAI(body) : mockAnalyze(body);
-    return NextResponse.json(normalizeAnalysis(result, body));
+    stage = "response_normalize";
+    const normalized = normalizeAnalysis(result, body);
+    console.info("[api/analyze] succeeded", { requestId, durationMs: Date.now() - startedAt, itemCount: normalized.items.length });
+    return NextResponse.json(normalized);
   } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: "AI 分析失败，请稍后重试或使用 mock 模式" }, { status: 500 });
+    console.error("[api/analyze] failed", {
+      requestId,
+      stage,
+      durationMs: Date.now() - startedAt,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorMessage: error instanceof Error ? error.message.slice(0, 300) : safeString(error).slice(0, 300),
+    });
+    return NextResponse.json({ error: "AI 分析失败，请稍后重试或使用 mock 模式", requestId }, { status: 500 });
   }
 }
