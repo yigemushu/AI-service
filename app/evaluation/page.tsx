@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Section } from "@/components/Section";
 import { primaryButtonClass, secondaryButtonClass } from "@/components/ui";
-import { businessTypeLabels } from "@/lib/constants";
+import { businessTypeLabels, mergeDefaultTemplates } from "@/lib/constants";
 import { evaluationMetrics, evaluationSamples, scoreEvaluationSample, type EvaluationScore } from "@/lib/evaluationSamples";
-import { createId, getEvaluationRuns, getOptimizationRecords, getSettings, getTemplates, saveEvaluationRuns, saveOptimizationRecords } from "@/lib/storage";
+import { createId, getEvaluationRuns, getOptimizationRecords, getSettings, getTemplates, saveEvaluationRuns, saveOptimizationRecords, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, BusinessType, EvaluationRun, OptimizationRecord } from "@/lib/types";
 
 type RunResult = {
@@ -111,9 +111,12 @@ export default function EvaluationPage() {
 
   async function analyzeSample(sample: (typeof evaluationSamples)[number]) {
     const settings = getSettings();
-    const enabledTemplates = getTemplates()
+    const storedTemplates = getTemplates();
+    const templates = mergeDefaultTemplates(storedTemplates);
+    if (templates.length !== storedTemplates.length) saveTemplates(templates);
+    const enabledTemplates = templates
       .filter((template) => template.enabled && template.businessType === sample.businessType)
-      .map(({ name, scenario, content }) => ({ name, scenario, content }));
+      .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
     const response = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -9,7 +9,7 @@ type AnalyzeRequest = {
   sellerRules?: string;
   systemPrompt?: string;
   responseMode?: "fast" | "full";
-  enabledTemplates?: Array<{ name: string; scenario: string; content: string }>;
+  enabledTemplates?: Array<{ name: string; scenario: string; requiredInfo?: string; content: string }>;
   knowledgeRules?: Array<{ title: string; category: string; content: string }>;
 };
 
@@ -84,6 +84,12 @@ const knownProducts = [
   "stainless steel water bottles", "water bottles", "yoga mats", "LED desk lamp", "custom tote bags", "bamboo toothbrush", "ceramic mugs", "pet carriers", "silicone lunch boxes", "umbrellas", "camping chairs",
   "pet bowls", "silicone bibs", "baby toys", "notebooks", "lunch bags", "electric lunch boxes", "promotional umbrellas", "kids bottles", "storage boxes", "backpacks", "zippers",
 ];
+const virtualServiceNames = [
+  "AI写作", "写作", "代写", "润色", "改写", "论文润色", "文案优化", "小红书文案", "公众号文章", "脚本", "短视频脚本",
+  "道歉检讨书", "检讨书", "道歉信", "致歉信", "演讲稿", "发言稿", "申请书", "读后感", "观后感",
+  "PPT", "简历优化", "简历", "求职信", "翻译", "海报设计", "logo设计", "设计", "图片处理", "修图", "排版",
+  "AI生成", "提示词", "prompt", "课程作业", "报告", "方案", "商业计划书", "咨询",
+];
 const chineseDigits: Record<string, number> = { "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
 const units = ["个", "盒", "包", "袋", "份", "件", "箱", "瓶", "套", "斤", "台", "pieces"];
 const unitPattern = units.join("|");
@@ -121,6 +127,20 @@ function pickPlatform(text: string, businessType: BusinessType) {
   return "微信";
 }
 
+function isVirtualServiceText(text: string) {
+  return /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|求职信|翻译|海报|logo|设计|修图|排版|AI生成|提示词|prompt|课程作业|报告|方案|咨询|字数|页数|交稿|交付|修改几次|源文件)/i.test(text);
+}
+
+function addVirtualServiceItem(items: AnalyzeApiItem[], text: string) {
+  for (const service of virtualServiceNames) {
+    if (new RegExp(service.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(text)) {
+      addItem(items, service, "", "high");
+      return;
+    }
+  }
+  if (isVirtualServiceText(text)) addItem(items, "待确认虚拟服务", "", "low");
+}
+
 function extractMockItems(text: string, businessType: BusinessType) {
   const items: AnalyzeApiItem[] = [];
   const productList = businessType === "local" ? ["清洗空调", "空调清洗", "保洁"] : knownProducts;
@@ -137,6 +157,7 @@ function extractMockItems(text: string, businessType: BusinessType) {
   }
   const tradeMatch = text.match(/([\d,]+)\s*(pieces|pcs|件)?\s+(?:of\s+)?([a-zA-Z\s-]{3,60}?)(?:\.|,| before| with| to| for| if|$)/i);
   if (tradeMatch) addItem(items, tradeMatch[3].trim(), `${tradeMatch[1]}${tradeMatch[2] || "pieces"}`, "high");
+  if (businessType === "xianyu") addVirtualServiceItem(items, text);
   if (items.length === 0 && /便宜|包邮|发货|成色/.test(text)) addItem(items, "待确认商品", "", "low");
   if (items.length === 0 && /服务|上门|预约|清洗|保洁/.test(text)) addItem(items, "待确认服务", "", "low");
   return items;
@@ -173,7 +194,9 @@ function mockAnalyze(input: AnalyzeRequest): AnalyzeApiResponse {
 
 function buildPrompt(input: AnalyzeRequest) {
   const businessType = input.businessType || "sam";
-  const templates = input.enabledTemplates?.length ? input.enabledTemplates.map((tpl) => `- ${tpl.name}（${tpl.scenario}）：${tpl.content}`).join("\n") : "暂无启用模板";
+  const templates = input.enabledTemplates?.length
+    ? input.enabledTemplates.map((tpl) => `- ${tpl.name}（${tpl.scenario}）\n  需要的信息：${tpl.requiredInfo || "按模板内容判断"}\n  回复模板：${tpl.content}`).join("\n")
+    : "暂无启用模板";
   const knowledgeRules = input.knowledgeRules?.length
     ? input.knowledgeRules.map((rule) => `- ${rule.title}（${rule.category}）：${rule.content}`).join("\n")
     : "暂无知识库规则";
@@ -190,12 +213,14 @@ function buildPrompt(input: AnalyzeRequest) {
     "",
     "输出要求：严格返回 JSON。reply 只能是草稿，不要自动发送。不要承诺一定有货、一定送达、最低价或无条件退款。",
     "reply 是给客户看的推荐回复，不是内部分析。请写得像微信真人商家：短、自然、有一点情绪，不要一大段说明。中文场景一般 2-4 行，先接住客户需求，再问缺失信息或说明需要确认。可以少量使用“哦、呀、哈、我帮你看下”，中文回复的 ~ 只放在整段最后一句结尾，不要每句话都加。外贸询盘保持英文商务语气，不使用 ~。",
+    "如果是闲鱼虚拟服务，reply 必须像服务商沟通：问具体内容、用途/场景、字数/页数、风格语气、截止时间、交付格式和修改次数。不要询问收货地址、联系方式、包邮、发货、库存、成色，也不要承诺包过、保证原创、无限修改。",
     "reply 不要把商品、数量、风险、缺失信息像报告一样全部堆给客户；只保留客户下一步需要知道或补充的内容。风险和内部判断放到 risk_flags、missing_info、next_action。",
     "order_status 必须且只能使用这些固定值之一：待补充、待确认、待报价、待下单、处理中、售后中、已完成、已取消。",
     "状态判断规则：缺少地址、电话、数量、规格、目的地、贸易条款等关键信息时用待补充；外贸询价或需要报价时用待报价；闲鱼已拍下/待发货用处理中；退款、破损、投诉、没收到、质量问题用售后中；信息基本齐全但仍需人工确认库存、价格、排期或配送时用待确认。",
-    "missing_info 要具体列出仍需补充的字段，例如联系方式、收货地址、服务地点、规格、数量、目的港、贸易条款、照片、订单号。",
-    "risk_flags 要覆盖真实经营风险，例如库存、价格、配送时效、包邮/议价、成色/正品、上门排期、售后证据、MOQ、贸易条款、交期，不要只写泛泛的风险。",
-    "items 要尽量拆分所有商品/服务，数量和单位分开放入 quantity 与 unit；无法确定商品时写待确认商品或待确认服务。",
+    "闲鱼不仅有实体商品，也可能是写作、润色、PPT、简历、设计、翻译、AI生成、咨询等虚拟服务。遇到虚拟服务时，不要要求收货地址、包邮或发货方式；要识别服务内容、需求范围、素材、字数/页数/数量、交付格式、截止时间、修改次数、是否可商用和报价边界。",
+    "missing_info 要具体列出仍需补充的字段，例如联系方式、收货地址、服务地点、规格、数量、目的港、贸易条款、照片、订单号；虚拟服务则列需求说明、素材、字数/页数、交付格式、截止时间、修改次数、用途/风格。",
+    "risk_flags 要覆盖真实经营风险，例如库存、价格、配送时效、包邮/议价、成色/正品、上门排期、售后证据、MOQ、贸易条款、交期；虚拟服务还要覆盖需求不清、范围蔓延、版权/原创承诺、违规代写、无限修改、交付验收边界，不要只写泛泛的风险。",
+    "items 要尽量拆分所有商品/服务，数量和单位分开放入 quantity 与 unit；无法确定实物时写待确认商品，无法确定非实体服务时写待确认虚拟服务。",
     "客户聊天记录：",
     input.chatText || "",
   ].join("\n");
@@ -243,6 +268,64 @@ function safeLower(value: unknown) {
   return safe.toLowerCase();
 }
 
+function getLatestCustomerSignal(text: string) {
+  const marker = "最新客户消息：";
+  const index = text.lastIndexOf(marker);
+  if (index >= 0) return text.slice(index + marker.length).trim();
+  return text;
+}
+
+function hasVirtualDemandDetail(text: string) {
+  return /(因为|昨天|朋友|女朋友|男朋友|客户|老师|领导|同学|用于|场景|原因|内容|事情|经过|认错|道歉|分手|迟到|吵架|不耐烦|素材|原文|资料|参考|文档|文件)/.test(text);
+}
+
+function hasVirtualPurpose(text: string) {
+  return /(用于|用途|场景|发给|给.{0,8}(女朋友|男朋友|朋友|老师|领导|客户|同学)|道歉认错|表白|求职|汇报|发布|小红书|朋友圈)/.test(text);
+}
+
+function hasVirtualStyle(text: string) {
+  return /(语气|风格|诚恳|委婉|真诚|正式|口语|温柔|不卑微|深刻|情感|幽默|专业|高级|自然|像真人)/.test(text);
+}
+
+function hasVirtualDeadline(text: string) {
+  return /(今晚|今天|明天|后天|七点|7点|点前|截止|交稿|ddl|deadline|中午|晚上|下午|上午|周|星期)/i.test(text);
+}
+
+function hasVirtualFormat(text: string) {
+  return /(Word|PDF|PPT|源文件|格式|docx|xlsx|图片|海报|链接|文档|文字版|微信发|直接发)/i.test(text);
+}
+
+function hasVirtualWorkload(text: string) {
+  return /([0-9０-９一二两三四五六七八九十百千万]+\s*(字|页|篇|份|张|套)|字数|页数|篇幅|工作量|多少字|多长|一千|两千|三千)/.test(text);
+}
+
+function hasRevisionBoundary(text: string) {
+  return /(修改|改几次|返工|定稿|满意为止|验收|包改|改到)/.test(text);
+}
+
+function removeSatisfiedVirtualMissingInfo(missingInfo: string[], signalText: string) {
+  return missingInfo.filter((item) => {
+    if (/(需求|素材|内容|具体内容|主题|原文|资料|文档|文件|事件|经过)/.test(item)) return !hasVirtualDemandDetail(signalText);
+    if (/(用途|场景)/.test(item)) return !hasVirtualPurpose(signalText);
+    if (/(风格|语气)/.test(item)) return !hasVirtualStyle(signalText);
+    if (/(截止|时间|交付时间|什么时候要)/.test(item)) return !hasVirtualDeadline(signalText);
+    if (/(字数|页数|工作量|篇幅)/.test(item)) return !hasVirtualWorkload(signalText);
+    if (/(交付格式|格式|源文件)/.test(item)) return !hasVirtualFormat(signalText);
+    if (/(修改|验收|边界)/.test(item)) return !hasRevisionBoundary(signalText);
+    return true;
+  });
+}
+
+function dedupeMissingInfo(list: string[]) {
+  const normalized = list.map((item) => {
+    if (/(修改|验收|边界)/.test(item)) return "修改次数/验收边界";
+    if (/(字数|页数|工作量|篇幅|多长)/.test(item)) return "字数/页数/工作量";
+    if (/(交付格式|格式|源文件)/.test(item)) return "交付格式";
+    return item;
+  });
+  return normalized.filter((item, index) => item && !normalized.some((other, otherIndex) => otherIndex < index && (item.includes(other) || other.includes(item))));
+}
+
 function buildWarmReply(businessType: BusinessType, itemText: string, missingInfo: string[]) {
   if (businessType === "trade") {
     return `Thank you for your inquiry. We noted your request: ${itemText}.\n\nPlease share the missing details so we can confirm MOQ, price and lead time before sending a formal quotation.`;
@@ -253,18 +336,24 @@ function buildWarmReply(businessType: BusinessType, itemText: string, missingInf
       return `可以的哦，我先帮你看一下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认下今天能不能安排、以及现在有没有货~`;
     }
     if (businessType === "xianyu") {
+      const isVirtual = missingInfo.some((item) => /需求|素材|字数|页数|交付|截止|修改|用途|风格|格式/.test(item)) || /写作|润色|PPT|简历|设计|虚拟服务|翻译|文案/.test(itemText);
+      if (isVirtual) return `可以的，我先帮你看下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认工作量后给你报价哈~`;
       return `可以的，我先帮你确认下：${itemText}。\n\n麻烦你补充一下${missingText}，我看完再给你准话哈~`;
     }
     return `可以的，我先帮你看一下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认下时间和报价后回复你~`;
   }
   if (businessType === "sam") return `可以的哦，我先帮你看一下：${itemText}。\n\n我确认下库存、价格和今天能不能安排，再回复你~`;
-  if (businessType === "xianyu") return `可以的，我先帮你确认下：${itemText}。\n\n我看下商品状态和发货安排，再给你准话哈~`;
+  if (businessType === "xianyu") {
+    if (/写作|润色|PPT|简历|设计|虚拟服务|翻译|文案/.test(itemText)) return `可以的，我先帮你看下：${itemText}。\n\n我确认下需求范围、交付时间和报价后回复你哈~`;
+    return `可以的，我先帮你确认下：${itemText}。\n\n我看下商品状态和发货安排，再给你准话哈~`;
+  }
   if (businessType === "local") return `可以的，我先帮你看一下：${itemText}。\n\n我确认下师傅时间和最终报价后回复你~`;
   return `收到，我先确认一下：${itemText}。`;
 }
 
 function enrichMissingInfo(missingInfo: string[], text: string, businessType: BusinessType) {
-  const next = [...missingInfo];
+  const signalText = getLatestCustomerSignal(text);
+  let next = [...missingInfo];
   const hasAddress = /(省|市|区|县|路|街|小区|地址|收货|青秀区|凤岭|民族大道|万象城|会展中心|良庆|Germany|Malaysia|UAE|Canada|Australia|Rotterdam|Los Angeles|上海|广东|浙江|成都|广州|新疆)/i.test(text);
   const hasPhone = /(1[3-9]\d{9}|电话|手机号|联系方式|phone|email|平台有|你有)/i.test(text);
   const hasTime = /(今天|明天|后天|周|星期|月底|晚上|上午|下午|\d{1,2}点|delivery time|lead time|July)/i.test(text);
@@ -276,9 +365,21 @@ function enrichMissingInfo(missingInfo: string[], text: string, businessType: Bu
     if (!hasQuantity) addUnique(next, "数量");
   }
   if (businessType === "xianyu") {
-    if (!hasAddress && !/自提|平台有/.test(text)) addUnique(next, "收货地");
-    if (/型号|128|256|尺码|M 码|成色|几成新/.test(text)) addUnique(next, "规格/成色确认");
-    if (/没声音|退款|收到/.test(text)) addUnique(next, "订单号/照片或视频");
+    const isVirtualService = isVirtualServiceText(text);
+    if (isVirtualService) {
+      next = removeSatisfiedVirtualMissingInfo(next, signalText);
+      if (!hasVirtualDemandDetail(signalText)) addUnique(next, "具体内容/事件经过");
+      if (!hasVirtualPurpose(signalText)) addUnique(next, "用途/场景");
+      if (!hasVirtualStyle(signalText)) addUnique(next, "语气风格");
+      if (!hasVirtualWorkload(signalText)) addUnique(next, "字数/页数/工作量");
+      if (!hasVirtualDeadline(signalText)) addUnique(next, "截止时间");
+      if (!hasVirtualFormat(signalText)) addUnique(next, "交付格式");
+      if (!hasRevisionBoundary(signalText)) addUnique(next, "修改次数/验收边界");
+    } else {
+      if (!hasAddress && !/自提|平台有/.test(text)) addUnique(next, "收货地");
+      if (/型号|128|256|尺码|M 码|成色|几成新/.test(text)) addUnique(next, "规格/成色确认");
+      if (/没声音|退款|收到/.test(text)) addUnique(next, "订单号/照片或视频");
+    }
   }
   if (businessType === "local") {
     if (!hasAddress) addUnique(next, "服务地点");
@@ -292,13 +393,14 @@ function enrichMissingInfo(missingInfo: string[], text: string, businessType: Bu
     if (!/(Malaysia|Germany|UAE|Canada|Australia|Rotterdam|Los Angeles|Poland|Chile|EU|Mexico|UK|Dubai|Peru|destination|port|ship to)/i.test(text)) addUnique(next, "destination");
     if (!/(spec|size|color|logo|printing|box|packaging|custom)/i.test(text)) addUnique(next, "specification");
   }
-  return next;
+  return dedupeMissingInfo(next);
 }
 
 function inferStableStatus(text: string, businessType: BusinessType, missingInfo: string[]) {
   if (/售后|退款|没到|还没到|投诉|压坏|破损|异味|broken|solve|quality|shipment/i.test(text)) return "售后中";
   if (/拍下了|已拍|寄出|发货|平台有/.test(text)) return "处理中";
   if (businessType === "trade" && /(\d[\d,]*)\s*(pcs|pieces)?|quote|FOB|CIF|DDP|price/i.test(text) && /(Malaysia|Germany|UAE|Canada|Australia|Rotterdam|Los Angeles|Poland|Chile|EU|Mexico|UK|Dubai|Peru|destination|port|ship to)/i.test(text)) return "待报价";
+  if (businessType === "xianyu" && isVirtualServiceText(text) && /报价|多少钱|价格|怎么收费|费用|多少米|多少/.test(text)) return missingInfo.length > 0 ? "待补充" : "待报价";
   if (missingInfo.length > 0) return "待补充";
   if (businessType === "trade" || /报价|多少钱|quote|price|FOB|CIF|DDP/i.test(text)) return "待报价";
   return "待确认";
@@ -316,23 +418,50 @@ function extractMentionedTime(text: string) {
   return text.match(/(今天|明天|后天|周[一二三四五六日天]|星期[一二三四五六日天]|月底|上午|下午|晚上|今晚|中午|July\s*\d+|lead time|delivery time)/i)?.[0] || "";
 }
 
-function sanitizeReply(reply: string) {
-  return (reply || "")
+function sanitizeReply(reply: string, isVirtualXianyu = false, itemText = "", text = "", missingInfo: string[] = []) {
+  const cleaned = (reply || "")
     .replace(/一定有货/g, "我先帮您确认库存")
     .replace(/一定送达/g, "我先帮您确认配送时效")
-    .replace(/最低价/g, "按当前可确认价格");
+    .replace(/最低价/g, "按当前可确认价格")
+    .replace(/包过/g, "我会按确认好的要求处理")
+    .replace(/保证原创/g, "会尽量按原创要求处理，具体以确认范围为准")
+    .replace(/无限修改/g, "按确认好的修改次数调整");
+  if (!isVirtualXianyu) return cleaned;
+  if (/收货地址|收货地|发货|包邮|库存|成色|物流|快递|联系电话|联系方式/.test(cleaned)) {
+    return buildWarmReply("xianyu", itemText || "这项服务", missingInfo);
+  }
+  const signalText = getLatestCustomerSignal(text);
+  const satisfiedKeys = [
+    hasVirtualDemandDetail(signalText) ? /(具体内容|内容|事件|经过|需求|素材|资料)/ : null,
+    hasVirtualPurpose(signalText) ? /(用途|场景)/ : null,
+    hasVirtualStyle(signalText) ? /(语气|风格)/ : null,
+    hasVirtualDeadline(signalText) ? /(截止|时间|什么时候要)/ : null,
+  ].filter(Boolean) as RegExp[];
+  const asksSatisfiedInfo = satisfiedKeys.some((pattern) => pattern.test(cleaned));
+  if (asksSatisfiedInfo && missingInfo.length > 0) {
+    const missingText = missingInfo.join("、");
+    return `可以的，我先帮你整理成一版${itemText || "内容"}。\n\n目前你补充的信息我记下了，麻烦再确认一下${missingText}，我好判断工作量并给你报价哈~`;
+  }
+  return cleaned;
 }
 
 function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): AnalyzeApiResponse {
   const text = input.chatText || "";
   const businessType = input.businessType || "sam";
-  const items = mergeItems(result.items || [], extractMockItems(text, businessType));
+  const items = mergeItems(result.items || [], extractMockItems(text, businessType)).filter((item, _index, list) => {
+    if (item.name !== "待确认虚拟服务") return true;
+    return !list.some((other) => other.name !== "待确认虚拟服务" && /(写作|文案|检讨|道歉|PPT|简历|设计|翻译|服务|稿|报告|方案)/.test(other.name));
+  });
   const missingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
+  const isVirtualXianyu = businessType === "xianyu" && isVirtualServiceText(text);
+  const itemText = items.map((item) => item.name).join("、");
   const riskFlags = new Set(normalizeStringList(result.risk_flags));
-  if (items.length > 0) riskFlags.add("库存、价格和履约时效需确认后再回复，不应直接承诺。");
+  if (items.length > 0 && isVirtualXianyu) riskFlags.add("虚拟服务的工作量、报价、交付格式和修改边界需确认后再回复，不应直接承诺结果。");
+  if (items.length > 0 && !isVirtualXianyu) riskFlags.add("库存、价格和履约时效需确认后再回复，不应直接承诺。");
   if (/便宜|最低价|砍价|包邮/.test(text)) riskFlags.add("客户正在议价或确认包邮，需要按商家规则确认价格。");
-  if (/今天|明天|上午|下午|急|delivery time/i.test(text)) riskFlags.add("客户有时效要求，需要确认库存、服务档期或配送能力。");
+  if (/今天|明天|上午|下午|急|delivery time/i.test(text)) riskFlags.add(isVirtualXianyu ? "客户有交付时效要求，需要确认工作量和是否来得及交付。" : "客户有时效要求，需要确认库存、服务档期或配送能力。");
   if (/成色|正品|验货|不合适|退|退款|没声音/.test(text)) riskFlags.add("闲鱼交易需确认成色、验货、退换和售后边界。");
+  if (isVirtualXianyu) riskFlags.add("虚拟服务需确认需求范围、素材、交付格式、截止时间和修改次数，避免承诺包过、保证原创或无限修改。");
   if (/上门|预约|清洗|保洁|维修|搬家|美甲|家教|拍摄/.test(text)) riskFlags.add("本地服务需确认上门地址、排期、服务范围和最终报价。");
   if (/MOQ|FOB|CIF|DDP|quote|price|lead time|pcs|pieces|shipment/i.test(text)) riskFlags.add("外贸询盘需确认 MOQ、贸易条款、目的港、规格和交期后再正式报价。");
   if (/异味|重新上门|昨天清洗|返工/.test(text)) riskFlags.add("本地服务售后需确认原订单、问题证据和是否需要返工。");
@@ -357,7 +486,7 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     order_status: inferStableStatus(text, businessType, missingInfo),
     risk_flags: Array.from(riskFlags),
     next_action: normalizeStringList(result.next_action),
-    reply: sanitizeReply(String(result.reply || "")),
+    reply: sanitizeReply(String(result.reply || ""), isVirtualXianyu, itemText, text, missingInfo),
   };
 }
 

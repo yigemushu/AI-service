@@ -6,6 +6,9 @@ export type IntentLevel = "低" | "中" | "高";
 
 export type SourcePlatform = "闲鱼" | "微信" | "淘宝" | "拼多多" | "Facebook" | "eBay" | "其他" | "未识别";
 
+export type InboxStatus = "未处理" | "已分析" | "已回复" | "待补信息" | "已成单" | "无效咨询";
+export type InboxSourceChannel = "网站手动" | "浏览器插件" | "安卓助手" | "iPhone快捷入口" | "官方接口" | "Webhook" | "其他";
+
 export type AnalyzeResult = {
   customerIntent: string;
   products: Array<{ name: string; quantity: string; unit?: string; notes?: string; confidence?: "高" | "中" | "低" }>;
@@ -34,8 +37,24 @@ export type AnalyzeApiResponse = {
   error?: string;
 };
 
+export type ConversationTurn = {
+  id: string;
+  role: "customer" | "assistant" | "seller_note";
+  content: string;
+  createdAt: string;
+};
+
+export type OrderHistoryEvent = {
+  id: string;
+  type: "created" | "status_changed" | "reply_generated" | "follow_up" | "note_updated" | "completed";
+  title: string;
+  detail: string;
+  createdAt: string;
+};
+
 export type Order = {
   id: string;
+  orderTitle?: string;
   customerName: string;
   platform: SourcePlatform | string;
   businessType: BusinessType;
@@ -49,6 +68,23 @@ export type Order = {
   isNew: boolean;
   rawMessage: string;
   analysis: AnalyzeResult;
+  conversation?: ConversationTurn[];
+  history?: OrderHistoryEvent[];
+};
+
+export type CustomerMessage = {
+  id: string;
+  customerName: string;
+  platform: SourcePlatform | string;
+  sourceChannel?: InboxSourceChannel;
+  businessType: BusinessType;
+  rawMessage: string;
+  sourceUrl: string;
+  status: InboxStatus;
+  isNew: boolean;
+  createdAt: string;
+  updatedAt: string;
+  analysis?: AnalyzeResult;
 };
 
 export type MessageTemplate = {
@@ -56,6 +92,7 @@ export type MessageTemplate = {
   name: string;
   businessType: BusinessType;
   scenario: string;
+  requiredInfo?: string;
   content: string;
   enabled: boolean;
   createdAt: string;

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "AI 客服接单助手",
+  "version": "0.1.0",
+  "description": "把当前网页选中的客户消息发送到 AI 客服接单工作台。",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://localhost:3000/*", "https://*/*", "http://*/*"],
+  "action": {
+    "default_title": "发送到客服接单台",
+    "default_popup": "popup.html"
+  }
+}

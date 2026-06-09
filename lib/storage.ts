@@ -1,10 +1,11 @@
 "use client";
 
 import { defaultSettings } from "./constants";
-import type { EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
+import type { CustomerMessage, EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
 
 const keys = {
   orders: "ai-service.orders",
+  customerMessages: "ai-service.customer-messages",
   optimization: "ai-service.optimization",
   evaluationRuns: "ai-service.evaluation-runs",
   settings: "ai-service.settings",
@@ -36,6 +37,15 @@ export function getOrders() {
 export function saveOrders(orders: Order[]) {
   writeJson(keys.orders, orders);
   window.dispatchEvent(new Event("orders-updated"));
+}
+
+export function getCustomerMessages() {
+  return readJson<CustomerMessage[]>(keys.customerMessages, []);
+}
+
+export function saveCustomerMessages(messages: CustomerMessage[]) {
+  writeJson(keys.customerMessages, messages);
+  window.dispatchEvent(new Event("customer-messages-updated"));
 }
 
 export function getTemplates() {

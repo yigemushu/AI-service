@@ -9,7 +9,7 @@ export const businessTypeLabels: Record<BusinessType, string> = {
 
 export const businessGuides: Record<BusinessType, string> = {
   sam: "重点识别商品、数量、地址、配送时间、缺货替代、联系方式。",
-  xianyu: "重点识别砍价、商品成色、发货方式、是否包邮、是否急买。",
+  xianyu: "同时覆盖实物和虚拟服务。实物重点识别砍价、成色、发货、包邮；虚拟服务重点识别写作/润色/PPT/简历/设计等服务内容、交付格式、截止时间、素材和修改次数。",
   local: "重点识别服务类型、预约时间、地点、预算、联系方式。",
   trade: "重点识别产品、数量、MOQ、目的国家/地区、交期、报价需求。",
 };
@@ -43,6 +43,15 @@ export const defaultKnowledgeRules: KnowledgeRule[] = [
     updatedAt: now,
   },
   {
+    id: "rule_xianyu_virtual_service",
+    title: "闲鱼虚拟服务交付边界",
+    businessType: "xianyu",
+    category: "其他",
+    content: "遇到写作、润色、检讨书、道歉信、PPT、简历、设计、AI生成、咨询等非实体服务时，不要按实物要求收货地址、包邮、库存或发货；需先确认需求范围、字数/页数、素材、交付格式、截止时间、修改次数、是否可商用及报价边界，不承诺包过、保原创、百分百满意或无限修改。",
+    enabled: true,
+    updatedAt: now,
+  },
+  {
     id: "rule_local_booking",
     title: "本地服务预约前置条件",
     businessType: "local",
@@ -63,8 +72,20 @@ export const defaultKnowledgeRules: KnowledgeRule[] = [
 ];
 
 export const defaultTemplates: MessageTemplate[] = [
-  { id: "tpl_sam_missing", name: "信息补全", businessType: "sam", scenario: "缺少地址、电话、时间或规格", content: "可以的哦，我先帮你看一下。\n\n麻烦你发我一下详细地址、电话和期望送达时间，我确认下今天能不能安排、以及现在有没有货~", enabled: true, createdAt: now, updatedAt: now },
-  { id: "tpl_xianyu_price", name: "报价说明", businessType: "xianyu", scenario: "客户砍价或问包邮", content: "可以的，我先帮你确认下。\n\n价格和包邮要看收货地跟商品情况，我看完再给你准话哈~", enabled: true, createdAt: now, updatedAt: now },
-  { id: "tpl_local_confirm", name: "预约确认", businessType: "local", scenario: "客户咨询上门服务", content: "可以的，我先帮你看一下。\n\n麻烦你发我服务地址和方便的时间，我确认下师傅能不能安排、再给你报价~", enabled: true, createdAt: now, updatedAt: now },
-  { id: "tpl_trade_quote", name: "外贸报价说明", businessType: "trade", scenario: "外贸客户询价", content: "Thank you for your inquiry. Please share quantity, destination country, delivery terms, and target schedule. We will check pricing, MOQ, and lead time before sending a formal quotation.", enabled: true, createdAt: now, updatedAt: now },
+  { id: "tpl_sam_missing", name: "信息补全", businessType: "sam", scenario: "缺少地址、电话、时间或规格", requiredInfo: "详细地址\n联系电话\n期望送达时间\n商品规格/数量", content: "可以的哦，我先帮你看一下。\n\n麻烦你发我一下详细地址、电话和期望送达时间，我确认下今天能不能安排、以及现在有没有货~", enabled: true, createdAt: now, updatedAt: now },
+  { id: "tpl_xianyu_price", name: "报价说明", businessType: "xianyu", scenario: "客户砍价或问包邮", requiredInfo: "收货地\n是否自提\n商品规格/成色确认", content: "可以的，我先帮你确认下。\n\n价格和包邮要看收货地跟商品情况，我看完再给你准话哈~", enabled: true, createdAt: now, updatedAt: now },
+  { id: "tpl_xianyu_virtual_service", name: "虚拟服务确认", businessType: "xianyu", scenario: "写作、润色、检讨书、道歉信、PPT、简历、设计、AI生成等非实体服务", requiredInfo: "具体内容/事件经过\n用途/使用场景\n字数/页数/工作量\n语气风格\n截止时间\n交付格式\n修改次数/验收边界", content: "可以的，我先帮你看下需求。\n\n麻烦你发我具体内容、用途/场景、字数/页数、想要的语气风格、截止时间和需要的格式，我确认工作量后给你报价哈~", enabled: true, createdAt: now, updatedAt: now },
+  { id: "tpl_local_confirm", name: "预约确认", businessType: "local", scenario: "客户咨询上门服务", requiredInfo: "服务地址\n预约时间\n服务范围\n联系方式", content: "可以的，我先帮你看一下。\n\n麻烦你发我服务地址和方便的时间，我确认下师傅能不能安排、再给你报价~", enabled: true, createdAt: now, updatedAt: now },
+  { id: "tpl_trade_quote", name: "外贸报价说明", businessType: "trade", scenario: "外贸客户询价", requiredInfo: "quantity\nproduct specification\ndestination country/port\ntrade terms\nrequired delivery time", content: "Thank you for your inquiry. Please share quantity, destination country, delivery terms, and target schedule. We will check pricing, MOQ, and lead time before sending a formal quotation.", enabled: true, createdAt: now, updatedAt: now },
 ];
+
+export function mergeDefaultTemplates(templates: MessageTemplate[]) {
+  const existingIds = new Set(templates.map((template) => template.id));
+  const missingDefaults = defaultTemplates.filter((template) => !existingIds.has(template.id));
+  const upgraded = templates.map((template) => {
+    const defaultTemplate = defaultTemplates.find((item) => item.id === template.id);
+    if (!defaultTemplate || template.requiredInfo) return template;
+    return { ...template, requiredInfo: defaultTemplate.requiredInfo, updatedAt: new Date().toISOString() };
+  });
+  return [...upgraded, ...missingDefaults];
+}
