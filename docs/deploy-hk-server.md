@@ -64,6 +64,7 @@ OPENAI_MODEL=gpt-4.1-mini
 OPENAI_FAST_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=18000
 OPENAI_MAX_OUTPUT_TOKENS=800
+INBOX_WEBHOOK_TOKEN=your_random_webhook_token_here
 ```
 
 如果使用 OpenAI-compatible 服务：
@@ -74,6 +75,9 @@ OPENAI_API_KEY=your_provider_api_key_here
 OPENAI_BASE_URL=https://your-provider.example.com/v1
 OPENAI_MODEL=your-model-name
 OPENAI_FAST_MODEL=your-fast-model-name
+OPENAI_TIMEOUT_MS=18000
+OPENAI_MAX_OUTPUT_TOKENS=800
+INBOX_WEBHOOK_TOKEN=your_random_webhook_token_here
 ```
 
 注意：
@@ -81,6 +85,7 @@ OPENAI_FAST_MODEL=your-fast-model-name
 - 不要使用 `NEXT_PUBLIC_OPENAI_API_KEY`
 - 不要把 `.env.local` 上传到 GitHub
 - 不要在聊天、文档或截图中暴露真实 API Key
+- `INBOX_WEBHOOK_TOKEN` 必须配置成随机值，并在网站设置页和浏览器插件里填写同一个值，才能同步外部消息
 
 ## 5. 安装依赖并构建
 

@@ -150,6 +150,7 @@ export default function OptimizationPage() {
       name: `优化话术 ${record.sampleId || now.slice(0, 10)}`,
       businessType,
       scenario: record.errorType || "压测失败样本",
+      requiredInfo: record.correctResult || "按失败样本补充需要客户提供的信息。",
       content,
       enabled: true,
       createdAt: now,

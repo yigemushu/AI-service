@@ -30,11 +30,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!authed) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f6f7f9] px-4">
-        <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f1e8] px-4">
+        <div className="w-full max-w-md rounded-lg border border-amber-100 bg-white p-6 shadow-xl shadow-amber-100/60">
           <div className="mb-6">
-            <div className="text-xl font-semibold text-slate-950">AI 客服订单助手</div>
-            <p className="mt-2 text-sm text-slate-500">Demo 模式用于演示客服分析、订单沉淀和话术优化流程。</p>
+            <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Demo 工作台</div>
+            <div className="mt-3 text-2xl font-semibold text-slate-950">AI 客服接单助手</div>
+            <p className="mt-2 text-sm text-slate-500">集中处理客户消息、AI 分析订单、人工确认后回复。</p>
           </div>
           <div className="space-y-3">
             <label className="block">
@@ -65,13 +66,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f7f9]">
-      <aside className="border-b border-slate-200 bg-white lg:fixed lg:inset-y-0 lg:left-0 lg:w-64 lg:border-b-0 lg:border-r">
+    <div className="min-h-screen bg-[#f7f1e8]">
+      <aside className="border-b border-amber-100 bg-white/95 backdrop-blur lg:fixed lg:inset-y-0 lg:left-0 lg:w-64 lg:border-b-0 lg:border-r">
         <div className="flex h-full flex-col">
           <div className="px-5 py-5">
-            <div className="text-lg font-semibold text-slate-950">AI 客服订单助手</div>
-            <div className="mt-1 text-sm text-slate-500">聊天分析 · 订单沉淀 · 话术优化</div>
-            <div className="mt-3 inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">Demo 模式</div>
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-lg bg-[#111827] text-base font-black text-white">AI</div>
+              <div>
+                <div className="text-lg font-semibold text-slate-950">客服接单台</div>
+                <div className="text-xs font-medium text-slate-500">半自动 · 人工确认</div>
+              </div>
+            </div>
+            <div className="mt-4 rounded-lg bg-emerald-50 px-3 py-3 text-xs text-emerald-800">
+              新消息进入这里，AI 先分析，你确认后再复制回复。
+            </div>
           </div>
           <AppNav />
           <div className="mt-auto px-3 pb-4">

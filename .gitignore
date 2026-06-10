@@ -14,3 +14,4 @@ node_modules/
 *.tsbuildinfo
 .npm-cache/
 AI-service-v0.3-sync-patch.ps1
+data/inbox-messages.json

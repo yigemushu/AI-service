@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
-import { primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
+import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
 import { defaultSettings } from "@/lib/constants";
 import { demoOrders } from "@/lib/demoData";
 import { getOrders, getSettings, saveOrders, saveSettings } from "@/lib/storage";
@@ -44,14 +44,23 @@ export default function SettingsPage() {
             API Key 请放在项目根目录的 <code className="font-mono">.env.local</code>，不要发到聊天或提交到 GitHub。
           </div>
           <Field label="商家规则"><textarea className={`${textareaClass} min-h-36`} value={settings.merchantRules} onChange={(event) => setSettings({ ...settings, merchantRules: event.target.value })} /></Field>
+          <Field label="消息中心 Webhook Token">
+            <input
+              className={inputClass}
+              type="password"
+              value={settings.inboxWebhookToken || ""}
+              onChange={(event) => setSettings({ ...settings, inboxWebhookToken: event.target.value })}
+              placeholder="仅保存在本机浏览器 localStorage，用于同步 /api/inbox"
+            />
+          </Field>
           <div className="flex items-center gap-3">
-            <button className={primaryButtonClass} onClick={save}>保存设置</button>
+            <button type="button" className={primaryButtonClass} onClick={save}>保存设置</button>
             {saved ? <span className="text-sm font-medium text-emerald-700">已保存</span> : null}
           </div>
         </div>
       </Section>
       <Section title="演示数据">
-        <button className={secondaryButtonClass} onClick={loadDemoData}>加载演示数据</button>
+        <button type="button" className={secondaryButtonClass} onClick={loadDemoData}>加载演示数据</button>
       </Section>
     </div>
   );

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 客服接单助手</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span>AI 客服接单助手</span>
+        <strong>选中消息后发送</strong>
+      </header>
+
+      <label>
+        网站地址
+        <input id="baseUrl" placeholder="http://localhost:3000" />
+      </label>
+
+      <label>
+        Webhook Token
+        <input id="token" placeholder="没有设置可留空" type="password" />
+      </label>
+
+      <div class="grid">
+        <label>
+          平台
+          <select id="platform">
+            <option value="闲鱼">闲鱼</option>
+            <option value="微信">微信</option>
+            <option value="淘宝">淘宝</option>
+            <option value="拼多多">拼多多</option>
+            <option value="Facebook">Facebook</option>
+            <option value="eBay">eBay</option>
+            <option value="其他">其他</option>
+          </select>
+        </label>
+
+        <label>
+          业务
+          <select id="businessType">
+            <option value="xianyu">闲鱼卖货</option>
+            <option value="virtual">虚拟服务</option>
+            <option value="sam">山姆代下单</option>
+            <option value="local">本地服务</option>
+            <option value="trade">外贸询盘</option>
+          </select>
+        </label>
+      </div>
+
+      <label>
+        客户昵称
+        <input id="customerName" placeholder="可不填" />
+      </label>
+
+      <label>
+        选中的客户消息
+        <textarea id="rawMessage" placeholder="先在聊天页面选中客户消息，也可以手动粘贴"></textarea>
+      </label>
+
+      <button id="capture">读取网页选中文本</button>
+      <button id="send" class="primary">发送到消息中心</button>
+      <p id="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

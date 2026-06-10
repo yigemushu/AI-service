@@ -1,4 +1,4 @@
-import type { BusinessType, IntentLevel, Order, OrderStatus } from "./types";
+import type { BusinessType, IntentLevel, Order, OrderHistoryEvent, OrderStatus } from "./types";
 import { formatItemSummary, repairLegacyItemSummary } from "./format";
 
 export type OrderStats = {
@@ -20,14 +20,44 @@ function safeLower(value: unknown) {
 export function normalizeOrder(order: Order): Order {
   const createdAt = order.createdAt || order.updatedAt || new Date().toISOString();
   const products = order.analysis?.products || [];
+  const itemSummary = products.length > 0 ? formatItemSummary(products) : repairLegacyItemSummary(order.itemSummary) || "待确认";
+  const conversation = order.conversation?.length
+    ? order.conversation
+    : order.rawMessage
+      ? [{ id: `${order.id}_initial`, role: "customer" as const, content: order.rawMessage, createdAt }]
+      : [];
+  const orderTitle = order.orderTitle || buildOrderTitle({ customerName: order.customerName, itemSummary, summary: order.summary });
+  const history = order.history?.length
+    ? order.history
+    : [createOrderHistoryEvent("created", "订单创建", `初始需求：${order.summary || itemSummary}`, createdAt)];
   return {
     ...order,
+    orderTitle,
     platform: order.platform || "未识别",
-    itemSummary: products.length > 0 ? formatItemSummary(products) : repairLegacyItemSummary(order.itemSummary) || "待确认",
+    itemSummary,
     intentLevel: order.intentLevel || inferIntentLevel(order.analysis?.urgency, order.analysis?.missingInfo || []),
     createdAt,
     updatedAt: order.updatedAt || createdAt,
     isNew: order.isNew ?? false,
+    conversation,
+    history,
+  };
+}
+
+export function buildOrderTitle(input: { customerName?: string; itemSummary?: string; summary?: string }) {
+  const item = (input.itemSummary || input.summary || "待确认需求").replace(/\s+/g, " ").trim();
+  const customer = (input.customerName || "客户").trim();
+  const shortItem = item.length > 28 ? `${item.slice(0, 28)}...` : item;
+  return `${customer} - ${shortItem}`;
+}
+
+export function createOrderHistoryEvent(type: OrderHistoryEvent["type"], title: string, detail: string, createdAt = new Date().toISOString()): OrderHistoryEvent {
+  return {
+    id: `hist_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    title,
+    detail,
+    createdAt,
   };
 }
 
@@ -68,5 +98,5 @@ export function matchesOrderFilters(
   if (filters.businessType !== "all" && order.businessType !== filters.businessType) return false;
   if (filters.intentLevel !== "all" && order.intentLevel !== filters.intentLevel) return false;
   if (!keyword) return true;
-  return safeLower([order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage].map(safeString).join(" ")).includes(keyword);
+  return safeLower([order.orderTitle, order.customerName, order.platform, order.summary, order.itemSummary, order.note, order.rawMessage].map(safeString).join(" ")).includes(keyword);
 }

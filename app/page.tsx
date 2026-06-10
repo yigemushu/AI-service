@@ -6,15 +6,16 @@ import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { StatsCards } from "@/components/StatsCards";
 import { primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
-import { businessGuides, businessTypeLabels, defaultKnowledgeRules, defaultTemplates } from "@/lib/constants";
+import { businessGuides, businessTypeLabels, defaultKnowledgeRules, defaultTemplates, mergeDefaultTemplates } from "@/lib/constants";
 import { formatItemSummary, formatQuantity } from "@/lib/format";
-import { calculateStats, inferIntentLevel, mapOrderStatus } from "@/lib/orderUtils";
+import { buildOrderTitle, calculateStats, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus } from "@/lib/orderUtils";
 import { createId, getKnowledgeRules, getOrders, getSettings, getTemplates, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, Order } from "@/lib/types";
 
 const samples: Record<BusinessType, string> = {
   sam: "想要一个牛肉卷一个鸡胸肉，送青秀区，今天下午能到吗？",
   xianyu: "这个耳机还能便宜点吗？包邮不？今天拍什么时候发？",
+  virtual: "你好，可以帮我写一篇 800 字检讨书吗，今晚要，语气诚恳一点",
   local: "我想约明天下午上门清洗空调，青秀区，大概多少钱？",
   trade: "Hi, we need 500 pieces of stainless steel water bottles. Can you quote FOB price and delivery time to Malaysia?",
 };
@@ -53,9 +54,9 @@ export default function WorkbenchPage() {
 
   function ensureTemplates() {
     const existing = getTemplates();
-    if (existing.length > 0) return existing;
-    saveTemplates(defaultTemplates);
-    return defaultTemplates;
+    const next = mergeDefaultTemplates(existing);
+    if (next.length !== existing.length) saveTemplates(next);
+    return next;
   }
 
   function ensureKnowledgeRules() {
@@ -73,7 +74,12 @@ export default function WorkbenchPage() {
       const settings = getSettings();
       const enabledTemplates = ensureTemplates()
         .filter((template) => Boolean(template) && template.enabled && template.businessType === businessType)
-        .map((template) => ({ name: safeString(template.name), scenario: safeString(template.scenario), content: safeString(template.content) }));
+        .map((template) => ({
+          name: safeString(template.name),
+          scenario: safeString(template.scenario),
+          requiredInfo: safeString(template.requiredInfo),
+          content: safeString(template.content),
+        }));
       const knowledgeRules = ensureKnowledgeRules()
         .filter((rule) => Boolean(rule) && rule.enabled && (rule.businessType === "all" || rule.businessType === businessType))
         .map((rule) => ({ title: safeString(rule.title), category: safeString(rule.category), content: safeString(rule.content) }));
@@ -118,8 +124,10 @@ export default function WorkbenchPage() {
     const now = new Date();
     const missingInfo = safeArray(result.missingInfo);
     const itemSummary = formatItemSummary(result.products);
+    const orderTitle = buildOrderTitle({ customerName: result.customerName, itemSummary, summary: result.summary });
     const order: Order = {
       id: createId("order"),
+      orderTitle,
       customerName: result.customerName,
       platform: result.platform || "未识别",
       businessType,
@@ -133,6 +141,14 @@ export default function WorkbenchPage() {
       isNew: true,
       rawMessage: chatText,
       analysis: result,
+      conversation: [
+        { id: `turn_${now.getTime()}_customer`, role: "customer", content: chatText, createdAt: now.toISOString() },
+        { id: `turn_${now.getTime()}_assistant`, role: "assistant", content: result.reply, createdAt: now.toISOString() },
+      ],
+      history: [
+        createOrderHistoryEvent("created", "从工作台保存订单", `订单名称：${orderTitle}`, now.toISOString()),
+        createOrderHistoryEvent("reply_generated", "生成推荐回复", result.reply, now.toISOString()),
+      ],
     };
     saveOrders([order, ...getOrders()]);
     setMessage("订单已保存");
@@ -140,18 +156,32 @@ export default function WorkbenchPage() {
 
   return (
     <div className="space-y-5">
-      <header>
-        <h1 className="text-2xl font-semibold text-slate-950">工作台</h1>
-        <p className="mt-1 text-sm text-slate-500">粘贴聊天记录，生成订单分析、客服回复草稿，并沉淀客户信息。</p>
+      <header className="overflow-hidden rounded-lg border border-amber-100 bg-white shadow-sm shadow-amber-100/50">
+        <div className="grid gap-5 p-5 lg:grid-cols-[1.2fr_0.8fr] lg:p-6">
+          <div>
+            <div className="inline-flex rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">AI 客服接单工作台</div>
+            <h1 className="mt-3 text-2xl font-semibold text-slate-950 lg:text-3xl">先看懂客户，再确认回复</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">客户消息进入网站后，AI 帮你拆出商品、数量、地址、时间、缺失信息和风险点。你确认后复制回复，回到闲鱼、微信或外贸平台手动发送。</p>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <Link className={primaryButtonClass} href="/messages">进入消息中心</Link>
+              <Link className={secondaryButtonClass} href="/orders">查看客户订单</Link>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+            <QuickCard title="收到消息" text="新咨询先进入待处理列表" tone="bg-emerald-50 text-emerald-700" />
+            <QuickCard title="AI 分析" text="识别需求、缺失信息和风险" tone="bg-sky-50 text-sky-700" />
+            <QuickCard title="人工确认" text="复制回复或打开原平台发送" tone="bg-amber-50 text-amber-700" />
+          </div>
+        </div>
       </header>
 
       <StatsCards stats={stats} />
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{message}</div> : null}
 
-      <Section title="业务类型" description={businessGuides[businessType]}>
+      <Section title="快速分析" description={businessGuides[businessType]}>
         <div className="grid gap-2 sm:grid-cols-4">
           {(Object.keys(businessTypeLabels) as BusinessType[]).map((type) => (
-            <button type="button" key={type} className={`rounded-md border px-3 py-2 text-sm font-semibold ${businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`} onClick={() => changeBusinessType(type)}>
+            <button type="button" key={type} className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-amber-100 bg-white text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"}`} onClick={() => changeBusinessType(type)}>
               {businessTypeLabels[type]}
             </button>
           ))}
@@ -261,6 +291,9 @@ function buildQuickReply(chatText: string, businessType: BusinessType) {
   if (businessType === "xianyu") {
     return "收到，我先帮您核对一下价格、是否包邮、商品状态和发货时间，确认后马上回复您。";
   }
+  if (businessType === "virtual") {
+    return "收到，我先帮您确认需求内容、用途、字数/页数、截止时间、交付格式和报价边界，确认后马上回复您。";
+  }
   if (businessType === "local") {
     return "收到，我先帮您确认上门时间、服务地址、服务内容和报价规则，确认后马上给您准确回复。";
   }
@@ -283,6 +316,15 @@ function ListBlock({ title, items, empty = "暂无" }: { title: string; items: s
       <ul className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
         {(safeArray(items).length ? items : [empty]).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
       </ul>
+    </div>
+  );
+}
+
+function QuickCard({ title, text, tone }: { title: string; text: string; tone: string }) {
+  return (
+    <div className="rounded-lg border border-amber-100 bg-[#fffaf2] p-4">
+      <div className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{title}</div>
+      <div className="mt-2 text-sm leading-5 text-slate-700">{text}</div>
     </div>
   );
 }
