@@ -64,6 +64,13 @@ export default function OrdersPage() {
     } : order)));
   }
 
+  function deleteOrder(id: string) {
+    const target = orders.find((order) => order.id === id);
+    const confirmed = window.confirm(`确定要删除这条客户记录吗？\n\n客户：${target?.customerName || "未识别客户"}\n订单：${target?.orderTitle || target?.summary || "未命名订单"}\n\n删除后无法恢复。`);
+    if (!confirmed) return;
+    persist(orders.filter((order) => order.id !== id));
+  }
+
   function loadDemoData() {
     const existing = getOrders().filter((order) => !order.id.startsWith("demo_"));
     persist([...demoOrders, ...existing]);
@@ -151,7 +158,7 @@ export default function OrdersPage() {
           <div className="space-y-3">
             {filteredOrders.map((order) => (
               <article key={order.id} className={`rounded-md border border-slate-200 p-4 ${order.isNew ? "bg-red-50" : "bg-white"}`}>
-                <div className="grid gap-3 lg:grid-cols-[1fr_1fr_160px_130px_120px] lg:items-start">
+                <div className="grid gap-3 lg:grid-cols-[1fr_1fr_160px_130px_210px] lg:items-start">
                   <div>
                     <div className="font-semibold text-slate-950">{order.orderTitle || order.customerName}</div>
                     <div className="mt-1 text-sm text-slate-500">{order.platform} · {businessTypeLabels[order.businessType]}</div>
@@ -170,13 +177,18 @@ export default function OrdersPage() {
                     <option value="中">中</option>
                     <option value="低">低</option>
                   </select>
-                  <button
-                    className={`${order.status === "已完成" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : secondaryButtonClass} min-h-10`}
-                    onClick={() => completeOrder(order.id)}
-                    disabled={order.status === "已完成"}
-                  >
-                    {order.status === "已完成" ? "已完成" : "完成"}
-                  </button>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                    <button
+                      className={`${order.status === "已完成" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : secondaryButtonClass} min-h-10`}
+                      onClick={() => completeOrder(order.id)}
+                      disabled={order.status === "已完成"}
+                    >
+                      {order.status === "已完成" ? "已完成" : "完成"}
+                    </button>
+                    <button className="min-h-10 rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50" onClick={() => deleteOrder(order.id)}>
+                      删除
+                    </button>
+                  </div>
                 </div>
                 <textarea className={`${textareaClass} mt-3 min-h-20`} value={order.note} onChange={(event) => updateOrder(order.id, { note: event.target.value })} placeholder="跟进备注" />
               </article>
