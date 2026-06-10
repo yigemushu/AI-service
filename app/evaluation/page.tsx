@@ -32,7 +32,7 @@ function getAverage(results: RunResult[]) {
 function getBusinessCounts(samples: typeof evaluationSamples) {
   return samples.reduce<Record<BusinessType, number>>(
     (counts, sample) => ({ ...counts, [sample.businessType]: counts[sample.businessType] + 1 }),
-    { sam: 0, xianyu: 0, local: 0, trade: 0 },
+    { sam: 0, xianyu: 0, virtual: 0, local: 0, trade: 0 },
   );
 }
 
@@ -52,6 +52,7 @@ function buildRun(sampleGroup: EvaluationRun["sampleGroup"], samples: typeof eva
     {
       sam: { count: 0, score: 0, possible: 0 },
       xianyu: { count: 0, score: 0, possible: 0 },
+      virtual: { count: 0, score: 0, possible: 0 },
       local: { count: 0, score: 0, possible: 0 },
       trade: { count: 0, score: 0, possible: 0 },
     },
@@ -70,6 +71,7 @@ function buildRun(sampleGroup: EvaluationRun["sampleGroup"], samples: typeof eva
     byType: {
       sam: { count: byType.sam.count, average: byType.sam.possible ? (byType.sam.score / byType.sam.possible) * 100 : 0 },
       xianyu: { count: byType.xianyu.count, average: byType.xianyu.possible ? (byType.xianyu.score / byType.xianyu.possible) * 100 : 0 },
+      virtual: { count: byType.virtual.count, average: byType.virtual.possible ? (byType.virtual.score / byType.virtual.possible) * 100 : 0 },
       local: { count: byType.local.count, average: byType.local.possible ? (byType.local.score / byType.local.possible) * 100 : 0 },
       trade: { count: byType.trade.count, average: byType.trade.possible ? (byType.trade.score / byType.trade.possible) * 100 : 0 },
     },
@@ -215,6 +217,7 @@ export default function EvaluationPage() {
         <ScoreCard label="当前样本" value={`${activeSamples.length}`} />
         <ScoreCard label="山姆/代下单" value={`${businessCounts.sam}`} />
         <ScoreCard label="闲鱼卖货" value={`${businessCounts.xianyu}`} />
+        <ScoreCard label="虚拟服务" value={`${businessCounts.virtual}`} />
         <ScoreCard label="本地服务" value={`${businessCounts.local}`} />
         <ScoreCard label="外贸询盘" value={`${businessCounts.trade}`} />
         <ScoreCard label="平均准确率" value={results.length ? toPercent(average) : "-"} tone={average >= targetLine ? "good" : results.length ? "bad" : "neutral"} />
@@ -273,7 +276,7 @@ export default function EvaluationPage() {
                   <div className={`mt-1 text-lg font-semibold ${run.average >= targetLine ? "text-emerald-700" : "text-amber-700"}`}>{toPercent(run.average)}</div>
                 </div>
                 <div className="text-slate-600">
-                  山姆 {toPercent(run.byType.sam.average)} · 闲鱼 {toPercent(run.byType.xianyu.average)} · 本地 {toPercent(run.byType.local.average)} · 外贸 {toPercent(run.byType.trade.average)}
+                  山姆 {toPercent(run.byType.sam.average)} · 闲鱼 {toPercent(run.byType.xianyu.average)} · 虚拟 {toPercent(run.byType.virtual?.average || 0)} · 本地 {toPercent(run.byType.local.average)} · 外贸 {toPercent(run.byType.trade.average)}
                 </div>
               </div>
             ))

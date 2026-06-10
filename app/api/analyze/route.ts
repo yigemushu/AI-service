@@ -123,6 +123,7 @@ function pickPlatform(text: string, businessType: BusinessType) {
   if (/facebook/i.test(text)) return "Facebook";
   if (/ebay/i.test(text)) return "eBay";
   if (businessType === "xianyu") return "闲鱼";
+  if (businessType === "virtual") return "闲鱼";
   if (businessType === "trade") return "Facebook";
   return "微信";
 }
@@ -143,7 +144,7 @@ function addVirtualServiceItem(items: AnalyzeApiItem[], text: string) {
 
 function extractMockItems(text: string, businessType: BusinessType) {
   const items: AnalyzeApiItem[] = [];
-  const productList = businessType === "local" ? ["清洗空调", "空调清洗", "保洁"] : knownProducts;
+  const productList = businessType === "local" ? ["清洗空调", "空调清洗", "保洁"] : businessType === "virtual" ? [] : knownProducts;
   for (const product of productList) {
     const productRegExp = new RegExp(product.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
     const afterRegExp = new RegExp(`^\\s*(${quantityPattern})`, "i");
@@ -157,7 +158,7 @@ function extractMockItems(text: string, businessType: BusinessType) {
   }
   const tradeMatch = text.match(/([\d,]+)\s*(pieces|pcs|件)?\s+(?:of\s+)?([a-zA-Z\s-]{3,60}?)(?:\.|,| before| with| to| for| if|$)/i);
   if (tradeMatch) addItem(items, tradeMatch[3].trim(), `${tradeMatch[1]}${tradeMatch[2] || "pieces"}`, "high");
-  if (businessType === "xianyu") addVirtualServiceItem(items, text);
+  if (businessType === "xianyu" || businessType === "virtual") addVirtualServiceItem(items, text);
   if (items.length === 0 && /便宜|包邮|发货|成色/.test(text)) addItem(items, "待确认商品", "", "low");
   if (items.length === 0 && /服务|上门|预约|清洗|保洁/.test(text)) addItem(items, "待确认服务", "", "low");
   return items;
@@ -172,9 +173,9 @@ function mockAnalyze(input: AnalyzeRequest): AnalyzeApiResponse {
   const hasTime = /(今天|明天|后天|周|星期|\d{1,2}点|上午|下午|晚上|delivery time|lead time)/i.test(text);
   const isAfterSales = /退|退款|没到|还没到|售后|投诉/.test(text);
   const missingInfo = [
-    !hasAddress && businessType !== "xianyu" ? "地址/服务地点/目的地" : "",
+    !hasAddress && businessType !== "xianyu" && businessType !== "virtual" ? "地址/服务地点/目的地" : "",
     !hasPhone ? "联系方式" : "",
-    !hasTime && businessType !== "xianyu" ? "期望时间" : "",
+    !hasTime && businessType !== "xianyu" && businessType !== "virtual" ? "期望时间" : "",
     businessType === "trade" && !/MOQ|FOB|CIF|quote|price/i.test(text) ? "报价条款" : "",
   ].filter(Boolean);
   const itemText = items.map((item) => `${item.name}${item.quantity ? ` x${item.quantity}${item.unit}` : ""}`).join("、") || "待确认";
@@ -335,6 +336,9 @@ function buildWarmReply(businessType: BusinessType, itemText: string, missingInf
     if (businessType === "sam") {
       return `可以的哦，我先帮你看一下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认下今天能不能安排、以及现在有没有货~`;
     }
+    if (businessType === "virtual") {
+      return `可以的，我先帮你看下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认工作量后给你报价哈~`;
+    }
     if (businessType === "xianyu") {
       const isVirtual = missingInfo.some((item) => /需求|素材|字数|页数|交付|截止|修改|用途|风格|格式/.test(item)) || /写作|润色|PPT|简历|设计|虚拟服务|翻译|文案/.test(itemText);
       if (isVirtual) return `可以的，我先帮你看下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认工作量后给你报价哈~`;
@@ -343,6 +347,7 @@ function buildWarmReply(businessType: BusinessType, itemText: string, missingInf
     return `可以的，我先帮你看一下：${itemText}。\n\n麻烦你补充一下${missingText}，我确认下时间和报价后回复你~`;
   }
   if (businessType === "sam") return `可以的哦，我先帮你看一下：${itemText}。\n\n我确认下库存、价格和今天能不能安排，再回复你~`;
+  if (businessType === "virtual") return `可以的，我先帮你看下：${itemText}。\n\n我确认下需求范围、交付时间和报价后回复你哈~`;
   if (businessType === "xianyu") {
     if (/写作|润色|PPT|简历|设计|虚拟服务|翻译|文案/.test(itemText)) return `可以的，我先帮你看下：${itemText}。\n\n我确认下需求范围、交付时间和报价后回复你哈~`;
     return `可以的，我先帮你确认下：${itemText}。\n\n我看下商品状态和发货安排，再给你准话哈~`;
@@ -364,8 +369,8 @@ function enrichMissingInfo(missingInfo: string[], text: string, businessType: Bu
     if (!hasTime) addUnique(next, "期望送达时间");
     if (!hasQuantity) addUnique(next, "数量");
   }
-  if (businessType === "xianyu") {
-    const isVirtualService = isVirtualServiceText(text);
+  if (businessType === "xianyu" || businessType === "virtual") {
+    const isVirtualService = businessType === "virtual" || isVirtualServiceText(text);
     if (isVirtualService) {
       next = removeSatisfiedVirtualMissingInfo(next, signalText);
       if (!hasVirtualDemandDetail(signalText)) addUnique(next, "具体内容/事件经过");
@@ -400,7 +405,7 @@ function inferStableStatus(text: string, businessType: BusinessType, missingInfo
   if (/售后|退款|没到|还没到|投诉|压坏|破损|异味|broken|solve|quality|shipment/i.test(text)) return "售后中";
   if (/拍下了|已拍|寄出|发货|平台有/.test(text)) return "处理中";
   if (businessType === "trade" && /(\d[\d,]*)\s*(pcs|pieces)?|quote|FOB|CIF|DDP|price/i.test(text) && /(Malaysia|Germany|UAE|Canada|Australia|Rotterdam|Los Angeles|Poland|Chile|EU|Mexico|UK|Dubai|Peru|destination|port|ship to)/i.test(text)) return "待报价";
-  if (businessType === "xianyu" && isVirtualServiceText(text) && /报价|多少钱|价格|怎么收费|费用|多少米|多少/.test(text)) return missingInfo.length > 0 ? "待补充" : "待报价";
+  if ((businessType === "xianyu" || businessType === "virtual") && isVirtualServiceText(text) && /报价|多少钱|价格|怎么收费|费用|多少米|多少/.test(text)) return missingInfo.length > 0 ? "待补充" : "待报价";
   if (missingInfo.length > 0) return "待补充";
   if (businessType === "trade" || /报价|多少钱|quote|price|FOB|CIF|DDP/i.test(text)) return "待报价";
   return "待确认";
@@ -428,7 +433,7 @@ function sanitizeReply(reply: string, isVirtualXianyu = false, itemText = "", te
     .replace(/无限修改/g, "按确认好的修改次数调整");
   if (!isVirtualXianyu) return cleaned;
   if (/收货地址|收货地|发货|包邮|库存|成色|物流|快递|联系电话|联系方式/.test(cleaned)) {
-    return buildWarmReply("xianyu", itemText || "这项服务", missingInfo);
+    return buildWarmReply("virtual", itemText || "这项服务", missingInfo);
   }
   const signalText = getLatestCustomerSignal(text);
   const satisfiedKeys = [
@@ -453,7 +458,7 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     return !list.some((other) => other.name !== "待确认虚拟服务" && /(写作|文案|检讨|道歉|PPT|简历|设计|翻译|服务|稿|报告|方案)/.test(other.name));
   });
   const missingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
-  const isVirtualXianyu = businessType === "xianyu" && isVirtualServiceText(text);
+  const isVirtualXianyu = businessType === "virtual" || (businessType === "xianyu" && isVirtualServiceText(text));
   const itemText = items.map((item) => item.name).join("、");
   const riskFlags = new Set(normalizeStringList(result.risk_flags));
   if (items.length > 0 && isVirtualXianyu) riskFlags.add("虚拟服务的工作量、报价、交付格式和修改边界需确认后再回复，不应直接承诺结果。");

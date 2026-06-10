@@ -89,6 +89,7 @@ document.getElementById("send").addEventListener("click", async () => {
         platform: fields.platform.value,
         sourceChannel: "浏览器插件",
         businessType: fields.businessType.value,
+        text: rawMessage,
         rawMessage,
         sourceUrl: captured.url || "",
       }),

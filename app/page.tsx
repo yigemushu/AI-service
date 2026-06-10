@@ -15,6 +15,7 @@ import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, Order } from "@/l
 const samples: Record<BusinessType, string> = {
   sam: "想要一个牛肉卷一个鸡胸肉，送青秀区，今天下午能到吗？",
   xianyu: "这个耳机还能便宜点吗？包邮不？今天拍什么时候发？",
+  virtual: "你好，可以帮我写一篇 800 字检讨书吗，今晚要，语气诚恳一点",
   local: "我想约明天下午上门清洗空调，青秀区，大概多少钱？",
   trade: "Hi, we need 500 pieces of stainless steel water bottles. Can you quote FOB price and delivery time to Malaysia?",
 };
@@ -274,6 +275,9 @@ function buildQuickReply(chatText: string, businessType: BusinessType) {
   }
   if (businessType === "xianyu") {
     return "收到，我先帮您核对一下价格、是否包邮、商品状态和发货时间，确认后马上回复您。";
+  }
+  if (businessType === "virtual") {
+    return "收到，我先帮您确认需求内容、用途、字数/页数、截止时间、交付格式和报价边界，确认后马上回复您。";
   }
   if (businessType === "local") {
     return "收到，我先帮您确认上门时间、服务地址、服务内容和报价规则，确认后马上给您准确回复。";

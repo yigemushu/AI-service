@@ -106,7 +106,12 @@ export default function MessagesPage() {
 
   async function syncExternalMessages() {
     try {
-      const response = await fetch("/api/inbox", { cache: "no-store" });
+      const settings = getSettings();
+      const token = settings.inboxWebhookToken?.trim();
+      const response = await fetch("/api/inbox", {
+        cache: "no-store",
+        headers: token ? { "x-inbox-token": token } : undefined,
+      });
       const data = (await response.json()) as { messages?: CustomerMessage[]; error?: string };
       if (!response.ok || data.error) throw new Error(data.error || "sync failed");
       const incoming = safeArray(data.messages);
@@ -114,8 +119,9 @@ export default function MessagesPage() {
       const merged = [...incoming.filter((item) => !knownIds.has(item.id)), ...messages];
       persist(merged, incoming[0]?.id || selectedId);
       setNotice(incoming.length ? `已同步 ${incoming.length} 条外部消息` : "外部收件箱暂无消息");
-    } catch {
-      setNotice("同步外部消息失败，请确认 /api/inbox 可访问，或检查 Webhook Token 配置");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "同步失败";
+      setNotice(`同步外部消息失败：${message}。请确认服务器 INBOX_WEBHOOK_TOKEN 与设置页 Webhook Token 一致`);
     }
   }
 
@@ -230,11 +236,9 @@ export default function MessagesPage() {
       analysis: selected.analysis,
       conversation: [
         { id: `${selected.id}_customer`, role: "customer", content: selected.rawMessage, createdAt: selected.createdAt },
-        { id: `${selected.id}_assistant`, role: "assistant", content: selected.analysis.reply, createdAt: now },
       ],
       history: [
         createOrderHistoryEvent("created", "从消息中心保存订单", `订单名称：${orderTitle}`, now),
-        createOrderHistoryEvent("reply_generated", "生成推荐回复", selected.analysis.reply, now),
       ],
     };
     saveOrders([order, ...getOrders()]);

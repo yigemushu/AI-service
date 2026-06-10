@@ -10,6 +10,7 @@ type InboxPayload = {
   sourceChannel?: unknown;
   businessType?: unknown;
   rawMessage?: unknown;
+  text?: unknown;
   sourceUrl?: unknown;
 };
 
@@ -18,7 +19,7 @@ function safeString(value: unknown) {
 }
 
 function normalizeBusinessType(value: unknown): BusinessType {
-  if (value === "sam" || value === "xianyu" || value === "local" || value === "trade") return value;
+  if (value === "sam" || value === "xianyu" || value === "virtual" || value === "local" || value === "trade") return value;
   return "xianyu";
 }
 
@@ -52,8 +53,8 @@ export async function getServerInboxMessages() {
 }
 
 export async function addServerInboxMessage(payload: InboxPayload) {
-  const rawMessage = safeString(payload.rawMessage);
-  if (!rawMessage) throw new Error("rawMessage is required");
+  const rawMessage = safeString(payload.rawMessage) || safeString(payload.text);
+  if (!rawMessage) throw new Error("text is required");
 
   const now = new Date().toISOString();
   const message: CustomerMessage = {

@@ -1,4 +1,4 @@
-export type BusinessType = "sam" | "xianyu" | "local" | "trade";
+export type BusinessType = "sam" | "xianyu" | "virtual" | "local" | "trade";
 
 export type OrderStatus = "待补充" | "待确认" | "待报价" | "待下单" | "处理中" | "售后中" | "已完成" | "已取消";
 
@@ -163,4 +163,5 @@ export type EvaluationRun = {
 export type Settings = {
   systemPrompt: string;
   merchantRules: string;
+  inboxWebhookToken?: string;
 };

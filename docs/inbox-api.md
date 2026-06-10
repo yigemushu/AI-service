@@ -19,18 +19,22 @@ Content-Type: application/json
   "platform": "闲鱼",
   "sourceChannel": "浏览器插件",
   "businessType": "xianyu",
+  "text": "最低多少？今天能发吗？",
   "rawMessage": "最低多少？今天能发吗？",
-  "sourceUrl": "https://www.goofish.com/"
+  "sourceUrl": "https://www.goofish.com/",
+  "webhookToken": "your_token_here"
 }
 ```
 
 字段说明：
 
-- `rawMessage`：必填，客户原始消息。
-- `businessType`：可选，`sam`、`xianyu`、`local`、`trade`，不填默认 `xianyu`。
+- `text`：推荐字段，客户原始消息。
+- `rawMessage`：兼容旧字段，和 `text` 二选一即可。
+- `businessType`：可选，`sam`、`xianyu`、`virtual`、`local`、`trade`，不填默认 `xianyu`。
 - `platform`：可选，例如 `闲鱼`、`微信`、`Facebook`。
 - `sourceChannel`：可选，例如 `浏览器插件`、`安卓助手`、`iPhone快捷入口`、`官方接口`、`Webhook`。
 - `sourceUrl`：可选，原平台聊天链接。
+- `webhookToken`：可选，兼容请求体传 Token；更推荐使用 Header，不要写入日志或前端代码。
 
 返回：
 
@@ -62,7 +66,9 @@ GET /api/inbox
 INBOX_WEBHOOK_TOKEN=
 ```
 
-如果设置了这个值，外部工具提交消息时需要带上：
+必须设置这个值。未设置时，`/api/inbox` 会拒绝读取和写入，避免公网环境被随意写入消息。
+
+外部工具提交消息或网站消息中心同步时需要带上：
 
 ```http
 Authorization: Bearer your_token_here
