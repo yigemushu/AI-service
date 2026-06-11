@@ -1,7 +1,7 @@
 "use client";
 
 import { defaultSettings } from "./constants";
-import type { CustomerMessage, EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, Settings } from "./types";
+import type { CustomerMessage, EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, RecognitionExperience, Settings } from "./types";
 
 const keys = {
   orders: "ai-service.orders",
@@ -11,6 +11,7 @@ const keys = {
   settings: "ai-service.settings",
   templates: "ai-service.templates",
   knowledgeRules: "ai-service.knowledge-rules",
+  recognitionExperiences: "ai-service.recognition-experiences",
   feedback: "ai-service.feedback",
   demoAuth: "ai-service.demo-auth",
 };
@@ -64,6 +65,15 @@ export function getKnowledgeRules() {
 export function saveKnowledgeRules(rules: KnowledgeRule[]) {
   writeJson(keys.knowledgeRules, rules);
   window.dispatchEvent(new Event("knowledge-updated"));
+}
+
+export function getRecognitionExperiences() {
+  return readJson<RecognitionExperience[]>(keys.recognitionExperiences, []);
+}
+
+export function saveRecognitionExperiences(experiences: RecognitionExperience[]) {
+  writeJson(keys.recognitionExperiences, experiences);
+  window.dispatchEvent(new Event("recognition-experiences-updated"));
 }
 
 export function getOptimizationRecords() {

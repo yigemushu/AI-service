@@ -55,6 +55,7 @@ export type OrderHistoryEvent = {
 export type Order = {
   id: string;
   orderTitle?: string;
+  customerFolder?: string;
   customerName: string;
   platform: SourcePlatform | string;
   businessType: BusinessType;
@@ -74,6 +75,14 @@ export type Order = {
 
 export type CustomerMessage = {
   id: string;
+  customerFolder?: string;
+  linkedOrderId?: string;
+  productName?: string;
+  productConfirmed?: boolean;
+  productGuess?: string;
+  productConfidence?: number;
+  productRecognitionStatus?: "待确认" | "已确认" | "自动识别";
+  productRecognitionRuleId?: string;
   customerName: string;
   platform: SourcePlatform | string;
   sourceChannel?: InboxSourceChannel;
@@ -85,6 +94,20 @@ export type CustomerMessage = {
   createdAt: string;
   updatedAt: string;
   analysis?: AnalyzeResult;
+  conversation?: ConversationTurn[];
+};
+
+export type RecognitionExperience = {
+  id: string;
+  businessType: BusinessType;
+  keywords: string[];
+  productName: string;
+  subCategory: string;
+  correctCount: number;
+  wrongCount: number;
+  confidence: number;
+  autoConfirm: boolean;
+  updatedAt: string;
 };
 
 export type MessageTemplate = {
