@@ -212,6 +212,7 @@ function buildPrompt(input: AnalyzeRequest) {
     "启用话术模板：",
     templates,
     "",
+    "如果有启用话术模板，优先按最匹配模板的“需要的信息”判断 missing_info，并让 reply 参考对应“回复模板”的表达方式。",
     "输出要求：严格返回 JSON。reply 只能是草稿，不要自动发送。不要承诺一定有货、一定送达、最低价或无条件退款。",
     "reply 是给客户看的推荐回复，不是内部分析。请写得像微信真人商家：短、自然、有一点情绪，不要一大段说明。中文场景一般 2-4 行，先接住客户需求，再问缺失信息或说明需要确认。可以少量使用“哦、呀、哈、我帮你看下”，中文回复的 ~ 只放在整段最后一句结尾，不要每句话都加。外贸询盘保持英文商务语气，不使用 ~。",
     "如果是闲鱼虚拟服务，reply 必须像服务商沟通：问具体内容、用途/场景、字数/页数、风格语气、截止时间、交付格式和修改次数。不要询问收货地址、联系方式、包邮、发货、库存、成色，也不要承诺包过、保证原创、无限修改。",
@@ -322,9 +323,116 @@ function dedupeMissingInfo(list: string[]) {
     if (/(修改|验收|边界)/.test(item)) return "修改次数/验收边界";
     if (/(字数|页数|工作量|篇幅|多长)/.test(item)) return "字数/页数/工作量";
     if (/(交付格式|格式|源文件)/.test(item)) return "交付格式";
+    if (/(用途|场景)/.test(item)) return "用途/场景";
+    if (/(语气|风格)/.test(item)) return "语气风格";
+    if (/(具体内容|事件|经过|需求|素材)/.test(item)) return "具体内容/事件经过";
     return item;
   });
   return normalized.filter((item, index) => item && !normalized.some((other, otherIndex) => otherIndex < index && (item.includes(other) || other.includes(item))));
+}
+
+function parseRequiredInfo(value?: string) {
+  return String(value || "")
+    .split(/[\n\r、,，；;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function templateMatchesText(template: NonNullable<AnalyzeRequest["enabledTemplates"]>[number], text: string, businessType: BusinessType) {
+  const haystack = `${template.name} ${template.scenario} ${template.requiredInfo || ""} ${template.content}`.toLowerCase();
+  if (businessType === "xianyu" && isVirtualServiceText(text) && /(虚拟|写作|润色|检讨|道歉|ppt|简历|设计|ai生成|交付)/i.test(haystack)) return true;
+  if (businessType === "xianyu" && /砍价|便宜|最低|包邮|价格/.test(text) && /(报价|砍价|包邮|价格)/.test(haystack)) return true;
+  const keywords = text.match(/[\u4e00-\u9fa5A-Za-z]{2,}/g) || [];
+  return keywords.some((word) => word.length >= 2 && haystack.includes(word.toLowerCase()));
+}
+
+function pickMatchedTemplate(input: AnalyzeRequest, text: string, businessType: BusinessType) {
+  const templates = input.enabledTemplates || [];
+  if (templates.length === 0) return undefined;
+  return templates.find((template) => templateMatchesText(template, text, businessType)) || templates[0];
+}
+
+function isRequiredInfoSatisfied(label: string, text: string, businessType: BusinessType) {
+  const signalText = getLatestCustomerSignal(text);
+  if (/(具体内容|事件|经过|需求|素材|原文|资料|文档|文件)/.test(label)) return hasVirtualDemandDetail(signalText);
+  if (/(用途|场景)/.test(label)) return hasVirtualPurpose(signalText);
+  if (/(语气|风格)/.test(label)) return hasVirtualStyle(signalText);
+  if (/(字数|页数|工作量|篇幅|多长)/.test(label)) return hasVirtualWorkload(signalText);
+  if (/(截止|交付时间|期望时间|送达时间|预约时间|时间)/.test(label)) return hasVirtualDeadline(signalText) || /(今天|明天|后天|周|星期|月底|晚上|上午|下午|\d{1,2}点|delivery time|lead time|July)/i.test(text);
+  if (/(交付格式|格式|源文件)/.test(label)) return hasVirtualFormat(signalText);
+  if (/(修改|验收|边界)/.test(label)) return hasRevisionBoundary(signalText);
+  if (/(地址|收货地|收货地址|服务地址|服务地点)/.test(label)) return /(省|市|区|县|路|街|小区|地址|收货|青秀区|凤岭|民族大道|万象城|会展中心|良庆|上海|广东|浙江|成都|广州|新疆)/i.test(text);
+  if (/(电话|联系方式|联系)/.test(label)) return /(1[3-9]\d{9}|电话|手机号|联系方式|phone|email|平台有|你有)/i.test(text);
+  if (/(数量|规格|成色|型号)/.test(label)) return /(\d+|一|二|两|三|仨|四|五|六|七|八|九|十|套|盒|包|个|台|小时|型号|成色|尺码|规格)/i.test(text);
+  if (businessType === "trade" && /(quantity|数量)/i.test(label)) return /(\d[\d,]*)\s*(pcs|pieces)?/i.test(text);
+  if (businessType === "trade" && /(destination|目的|港|country|port)/i.test(label)) return /(Malaysia|Germany|UAE|Canada|Australia|Rotterdam|Los Angeles|Poland|Chile|EU|Mexico|UK|Dubai|Peru|destination|port|ship to)/i.test(text);
+  if (businessType === "trade" && /(trade terms|条款|FOB|CIF|DDP)/i.test(label)) return /(FOB|CIF|DDP|trade terms|terms)/i.test(text);
+  return false;
+}
+
+function applyTemplateRequiredInfo(missingInfo: string[], input: AnalyzeRequest, text: string, businessType: BusinessType) {
+  const matchedTemplate = pickMatchedTemplate(input, text, businessType);
+  if (!matchedTemplate) return { missingInfo, matchedTemplate };
+  const next = [...missingInfo];
+  for (const info of parseRequiredInfo(matchedTemplate.requiredInfo)) {
+    if (!isRequiredInfoSatisfied(info, text, businessType)) addUnique(next, info);
+  }
+  return { missingInfo: dedupeMissingInfo(next), matchedTemplate };
+}
+
+function replyMentionsMissingInfo(reply: string, missingInfo: string[]) {
+  if (missingInfo.length === 0) return true;
+  return missingInfo.some((item) => {
+    const words = item.split(/[\/、,，\s]+/).filter((word) => word.length >= 2);
+    return words.some((word) => reply.includes(word));
+  });
+}
+
+function applyTemplateReply(reply: string, matchedTemplate: NonNullable<AnalyzeRequest["enabledTemplates"]>[number] | undefined, missingInfo: string[]) {
+  if (!matchedTemplate?.content || missingInfo.length === 0) return reply;
+  if (/麻烦你补充一下|我确认工作量后给你报价|我看完再给你准话|我确认下时间和报价后回复|目前你补充的信息我记下了/.test(reply)) return matchedTemplate.content;
+  if (replyMentionsMissingInfo(reply, missingInfo)) return reply;
+  return matchedTemplate.content;
+}
+
+function isPhysicalXianyuInfo(value: string) {
+  return /(收货|收货地|收货地址|自提|包邮|发货|物流|快递|库存|成色|商品状态|联系电话|联系方式|运费)/.test(value);
+}
+
+function isPhysicalXianyuReply(value: string) {
+  return /(收货|收货地|收货地址|自提|包邮|发货|物流|快递|库存|成色|商品状态|联系电话|联系方式|运费|价格和是否包邮)/.test(value);
+}
+
+function enforceVirtualMissingInfo(missingInfo: string[], text: string) {
+  const signalText = getLatestCustomerSignal(text);
+  let next = removeSatisfiedVirtualMissingInfo(missingInfo.filter((item) => !isPhysicalXianyuInfo(item)), signalText);
+  if (!hasVirtualDemandDetail(signalText)) addUnique(next, "具体内容/事件经过");
+  if (!hasVirtualPurpose(signalText)) addUnique(next, "用途/场景");
+  if (!hasVirtualStyle(signalText)) addUnique(next, "语气风格");
+  if (!hasVirtualWorkload(signalText)) addUnique(next, "字数/页数/工作量");
+  if (!hasVirtualDeadline(signalText)) addUnique(next, "截止时间");
+  if (!hasVirtualFormat(signalText)) addUnique(next, "交付格式");
+  if (!hasRevisionBoundary(signalText)) addUnique(next, "修改次数/验收边界");
+  next = removeSatisfiedVirtualMissingInfo(next, signalText);
+  return dedupeMissingInfo(next).filter((item) => !isPhysicalXianyuInfo(item));
+}
+
+function buildVirtualServiceReply(itemText: string, missingInfo: string[], text: string) {
+  const signalText = getLatestCustomerSignal(text);
+  const serviceName = /检讨|道歉|致歉/.test(`${itemText} ${text}`) ? "道歉检讨书" : itemText || "这个需求";
+  if (missingInfo.length === 0) {
+    return `可以的，我先帮你看下：${serviceName}。\n\n你补充的信息我记下了，我确认下工作量和报价后回复你哈~`;
+  }
+  const missingText = missingInfo.join("、");
+  if (hasVirtualDemandDetail(signalText) || hasVirtualPurpose(signalText)) {
+    return `可以的，我先帮你看下：${serviceName}。\n\n你补充的内容和想表达的方向我记下了，麻烦再确认一下${missingText}，我好判断工作量并给你报价哈~`;
+  }
+  return `可以的，我先帮你看下：${serviceName}。\n\n麻烦你补充一下${missingText}，我确认工作量后给你报价哈~`;
+}
+
+function templateLooksPhysicalXianyu(template: NonNullable<AnalyzeRequest["enabledTemplates"]>[number] | undefined) {
+  if (!template) return false;
+  return isPhysicalXianyuInfo(`${template.name} ${template.scenario} ${template.requiredInfo || ""} ${template.content}`);
 }
 
 function buildWarmReply(businessType: BusinessType, itemText: string, missingInfo: string[]) {
@@ -432,8 +540,8 @@ function sanitizeReply(reply: string, isVirtualXianyu = false, itemText = "", te
     .replace(/保证原创/g, "会尽量按原创要求处理，具体以确认范围为准")
     .replace(/无限修改/g, "按确认好的修改次数调整");
   if (!isVirtualXianyu) return cleaned;
-  if (/收货地址|收货地|发货|包邮|库存|成色|物流|快递|联系电话|联系方式/.test(cleaned)) {
-    return buildWarmReply("virtual", itemText || "这项服务", missingInfo);
+  if (isPhysicalXianyuReply(cleaned)) {
+    return buildVirtualServiceReply(itemText || "这项服务", missingInfo, text);
   }
   const signalText = getLatestCustomerSignal(text);
   const satisfiedKeys = [
@@ -444,8 +552,7 @@ function sanitizeReply(reply: string, isVirtualXianyu = false, itemText = "", te
   ].filter(Boolean) as RegExp[];
   const asksSatisfiedInfo = satisfiedKeys.some((pattern) => pattern.test(cleaned));
   if (asksSatisfiedInfo && missingInfo.length > 0) {
-    const missingText = missingInfo.join("、");
-    return `可以的，我先帮你整理成一版${itemText || "内容"}。\n\n目前你补充的信息我记下了，麻烦再确认一下${missingText}，我好判断工作量并给你报价哈~`;
+    return buildVirtualServiceReply(itemText || "内容", missingInfo, text);
   }
   return cleaned;
 }
@@ -457,8 +564,11 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     if (item.name !== "待确认虚拟服务") return true;
     return !list.some((other) => other.name !== "待确认虚拟服务" && /(写作|文案|检讨|道歉|PPT|简历|设计|翻译|服务|稿|报告|方案)/.test(other.name));
   });
-  const missingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
   const isVirtualXianyu = businessType === "virtual" || (businessType === "xianyu" && isVirtualServiceText(text));
+  const enrichedMissingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
+  const templateResult = applyTemplateRequiredInfo(enrichedMissingInfo, input, text, businessType);
+  const missingInfo = isVirtualXianyu ? enforceVirtualMissingInfo(templateResult.missingInfo, text) : templateResult.missingInfo;
+  const matchedTemplate = isVirtualXianyu && templateLooksPhysicalXianyu(templateResult.matchedTemplate) ? undefined : templateResult.matchedTemplate;
   const itemText = items.map((item) => item.name).join("、");
   const riskFlags = new Set(normalizeStringList(result.risk_flags));
   if (items.length > 0 && isVirtualXianyu) riskFlags.add("虚拟服务的工作量、报价、交付格式和修改边界需确认后再回复，不应直接承诺结果。");
@@ -491,7 +601,9 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     order_status: inferStableStatus(text, businessType, missingInfo),
     risk_flags: Array.from(riskFlags),
     next_action: normalizeStringList(result.next_action),
-    reply: sanitizeReply(String(result.reply || ""), isVirtualXianyu, itemText, text, missingInfo),
+    reply: isVirtualXianyu
+      ? sanitizeReply(applyTemplateReply(String(result.reply || ""), matchedTemplate, missingInfo), true, itemText, text, missingInfo)
+      : applyTemplateReply(sanitizeReply(String(result.reply || ""), false, itemText, text, missingInfo), matchedTemplate, missingInfo),
   };
 }
 

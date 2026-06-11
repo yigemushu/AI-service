@@ -40,7 +40,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         history.push(createOrderHistoryEvent("status_changed", "状态变更", `${item.status} -> ${patch.status}`, now));
       }
       if (historyEvent) history.push(historyEvent);
-      return { ...item, ...patch, history, isNew: false, updatedAt: now };
+      return normalizeOrder({ ...item, ...patch, history, isNew: false, updatedAt: now });
     });
     setOrders(next);
     saveOrders(next);

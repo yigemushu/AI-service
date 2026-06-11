@@ -374,7 +374,6 @@ function columnForBusinessType(value: BusinessType): MainColumn {
   if (value === "virtual") return "xianyu";
   return value;
 }
-
 function getSubCategory(message: CustomerMessage, column: MainColumn) {
   if (column === "highIntent") return businessTypeLabels[message.businessType];
   if (column === "xianyu") {

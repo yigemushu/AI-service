@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addServerInboxMessage, getServerInboxMessages } from "@/lib/serverInbox";
+import { addServerInboxMessage, deleteServerInboxCustomer, getServerInboxMessages } from "@/lib/serverInbox";
 
 export const runtime = "nodejs";
 
@@ -68,6 +68,18 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid inbox payload";
     logInbox("fail", { requestId, method: "POST", reason: message });
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  if (!isAuthorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const body = await request.json();
+    const result = await deleteServerInboxCustomer(body);
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid inbox delete payload";
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

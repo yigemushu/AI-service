@@ -9,8 +9,8 @@ import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } f
 import { businessTypeLabels, orderStatuses } from "@/lib/constants";
 import { demoOrders } from "@/lib/demoData";
 import { createOrderHistoryEvent, calculateStats, matchesOrderFilters, normalizeOrder } from "@/lib/orderUtils";
-import { getOrders, saveOrders } from "@/lib/storage";
-import type { BusinessType, IntentLevel, Order, OrderStatus } from "@/lib/types";
+import { createId, getCustomerMessages, getOrders, saveCustomerMessages, saveOrders } from "@/lib/storage";
+import type { AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, IntentLevel, Order, OrderStatus } from "@/lib/types";
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -21,9 +21,9 @@ export default function OrdersPage() {
   const [statFilter, setStatFilter] = useState<StatsCardKey | null>(null);
 
   useEffect(() => {
-    const storedOrders = getOrders().map(normalizeOrder);
-    setOrders(storedOrders);
-    saveOrders(storedOrders);
+    const synced = syncMessageFoldersToOrders();
+    setOrders(synced);
+    saveOrders(synced);
   }, []);
 
   const filteredOrders = useMemo(
@@ -198,6 +198,124 @@ export default function OrdersPage() {
       </Section>
     </div>
   );
+}
+
+function getFolderName(message: Pick<CustomerMessage, "customerFolder" | "customerName">) {
+  return (message.customerFolder || message.customerName || "待归类").trim() || "待归类";
+}
+
+function getMessageConversation(message: CustomerMessage): ConversationTurn[] {
+  return message.conversation?.length
+    ? message.conversation
+    : [{ id: `${message.id}_initial`, role: "customer", content: message.rawMessage, createdAt: message.createdAt }];
+}
+
+function groupCustomerMessages(messages: CustomerMessage[]) {
+  const groups = new Map<string, CustomerMessage[]>();
+  for (const message of messages) {
+    if (message.status === "无效咨询") continue;
+    const key = `${message.platform}::${getFolderName(message)}`;
+    groups.set(key, [...(groups.get(key) || []), message]);
+  }
+  return [...groups.values()].map((items) => items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+}
+
+function fallbackAnalysis(message: CustomerMessage): AnalyzeResult {
+  const productName = message.productName || message.productGuess || "待确认需求";
+  return {
+    customerIntent: "客户发来新咨询，等待在客户订单中分析。",
+    products: [{ name: productName, quantity: "1", unit: "项", notes: "由消息中心同步", confidence: productName === "待确认需求" ? "低" : "中" }],
+    missingInfo: ["需要在客户订单中结合完整聊天分析"],
+    risks: ["请先核对客户真实需求，不要自动承诺价格、时效或结果。"],
+    nextActions: ["进入订单详情继续分析", "生成推荐回复"],
+    reply: "我先看下你的需求，确认好后回复你哈~",
+    summary: message.rawMessage.slice(0, 80) || "客户新咨询",
+    customerName: message.customerName,
+    platform: String(message.platform || "未识别"),
+    orderStatus: "待确认",
+    urgency: "medium",
+  };
+}
+
+function buildOrderFromMessageGroup(messages: CustomerMessage[], existingOrder?: Order) {
+  const latest = messages[0];
+  const folder = getFolderName(latest);
+  const analysis = existingOrder?.analysis || latest.analysis || fallbackAnalysis(latest);
+  const itemSummary = latest.productName || latest.productGuess || existingOrder?.itemSummary || formatProducts(analysis);
+  const now = new Date().toISOString();
+  return normalizeOrder({
+    ...(existingOrder || {}),
+    id: existingOrder?.id || createId("order"),
+    orderTitle: existingOrder?.orderTitle || `${folder} - ${itemSummary || "待确认需求"}`,
+    customerFolder: folder,
+    customerName: latest.customerName || folder,
+    platform: latest.platform || analysis.platform || "未识别",
+    businessType: latest.businessType,
+    summary: analysis.summary || latest.rawMessage.slice(0, 80),
+    itemSummary: itemSummary || "待确认",
+    status: existingOrder?.status || mapStatusFromMessage(latest),
+    intentLevel: existingOrder?.intentLevel || (analysis.urgency === "high" ? "高" : "中"),
+    note: existingOrder?.note || `来源消息：${latest.platform}`,
+    createdAt: existingOrder?.createdAt || latest.createdAt || now,
+    updatedAt: now,
+    isNew: latest.isNew,
+    rawMessage: messages.map((message) => message.rawMessage).join("\n\n"),
+    analysis,
+    conversation: messages.flatMap(getMessageConversation).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    history: existingOrder?.history || [createOrderHistoryEvent("created", "从消息中心同步订单", `客户文件夹：${folder}\n消息数：${messages.length}`, now)],
+  });
+}
+
+function formatProducts(analysis: AnalyzeResult) {
+  return analysis.products.map((item) => `${item.name}${item.quantity ? ` x${item.quantity}${item.unit || ""}` : ""}`).join("、") || "待确认";
+}
+
+function mapStatusFromMessage(message: CustomerMessage): OrderStatus {
+  if (message.status === "待补信息") return "待补充";
+  if (message.status === "已成单") return "待确认";
+  return "待确认";
+}
+
+function syncMessageFoldersToOrders() {
+  const messages = getCustomerMessages();
+  const orders = getOrders().map(normalizeOrder);
+  if (messages.length === 0) return orders;
+
+  let nextOrders = [...orders];
+  let changedOrders = false;
+  const nextMessages = [...messages];
+
+  for (const group of groupCustomerMessages(messages)) {
+    const latest = group[0];
+    const folder = getFolderName(latest);
+    const existingOrder =
+      nextOrders.find((order) => group.some((message) => message.linkedOrderId === order.id)) ||
+      nextOrders.find((order) => (order.customerFolder || order.customerName) === folder && order.platform === latest.platform && order.status !== "已完成");
+    if (existingOrder) {
+      const linked = group.some((message) => message.linkedOrderId === existingOrder.id);
+      if (!linked) {
+        for (let index = 0; index < nextMessages.length; index += 1) {
+          if (getFolderName(nextMessages[index]) === folder && nextMessages[index].platform === latest.platform) {
+            nextMessages[index] = { ...nextMessages[index], linkedOrderId: existingOrder.id };
+          }
+        }
+        changedOrders = true;
+      }
+      continue;
+    }
+
+    const order = buildOrderFromMessageGroup(group);
+    nextOrders = [order, ...nextOrders];
+    for (let index = 0; index < nextMessages.length; index += 1) {
+      if (getFolderName(nextMessages[index]) === folder && nextMessages[index].platform === latest.platform) {
+        nextMessages[index] = { ...nextMessages[index], linkedOrderId: order.id };
+      }
+    }
+    changedOrders = true;
+  }
+
+  if (changedOrders) saveCustomerMessages(nextMessages);
+  return nextOrders.map(normalizeOrder);
 }
 
 const statFilterLabels: Record<StatsCardKey, string> = {
