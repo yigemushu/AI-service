@@ -15,6 +15,14 @@ function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
+function normalizeConversationRole(role: unknown): ConversationTurn["role"] {
+  return role === "assistant" || role === "seller_note" ? role : "customer";
+}
+
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -60,10 +68,22 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     return defaultKnowledgeRules;
   }
 
-  function buildConversationHistory(currentOrder: Order) {
+  function getOrderConversation(currentOrder: Order): ConversationTurn[] {
     const turns = currentOrder.conversation?.length
       ? currentOrder.conversation
       : [{ id: `${currentOrder.id}_initial`, role: "customer" as const, content: currentOrder.rawMessage, createdAt: currentOrder.createdAt }];
+    return turns
+      .map((turn) => ({
+        id: safeString(turn.id) || `turn_${currentOrder.id}_${Date.now()}`,
+        role: normalizeConversationRole(turn.role),
+        content: safeString(turn.content),
+        createdAt: safeString(turn.createdAt) || currentOrder.createdAt,
+      }))
+      .filter((turn) => turn.content.trim());
+  }
+
+  function buildConversationHistory(currentOrder: Order) {
+    const turns = getOrderConversation(currentOrder);
     return turns
       .map((turn, index) => {
         const roleLabel = turn.role === "assistant" ? "最终回复" : turn.role === "seller_note" ? "商家备注" : "客户消息";
@@ -119,30 +139,61 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     ].join("\n");
   }
 
-  async function requestAnalysis(chatText: string, currentOrder: Order) {
+  async function requestAnalysis(currentOrder: Order, options: { mode: "continue" | "regenerate"; chatText: string; latestMessage?: string }) {
     const settings = getSettings();
+    const conversationHistory = getOrderConversation(currentOrder).map(({ role, content, createdAt }) => ({ role, content, createdAt }));
     const enabledTemplates = ensureTemplates()
       .filter((template) => template.enabled && template.businessType === currentOrder.businessType)
-      .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
+      .map(({ name, scenario, requiredInfo, content }) => ({ name: safeString(name), scenario: safeString(scenario), requiredInfo: safeString(requiredInfo), content: safeString(content) }));
     const knowledgeRules = ensureKnowledgeRules()
       .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType))
-      .map(({ title, category, content }) => ({ title, category, content }));
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chatText,
-        businessType: currentOrder.businessType,
-        systemPrompt: settings.systemPrompt,
-        sellerRules: settings.merchantRules,
-        enabledTemplates,
-        knowledgeRules,
-        responseMode: "fast",
-      }),
-    });
-    const data = (await response.json()) as AnalyzeApiResponse;
-    if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
-    return mapAnalyzeResponse(data);
+      .map(({ title, category, content }) => ({ title: safeString(title), category: safeString(category), content: safeString(content) }));
+    const latestMessage = safeString(options.latestMessage);
+    const logBase = {
+      orderId: currentOrder.id,
+      mode: options.mode,
+      businessType: currentOrder.businessType,
+      historyLength: conversationHistory.length,
+      latestMessageLength: latestMessage.length,
+      hasKnowledge: knowledgeRules.length > 0,
+      hasTemplates: enabledTemplates.length > 0,
+    };
+    console.info("[order-detail/analyze] request started", logBase);
+    let response: Response | undefined;
+    try {
+      response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatText: options.chatText,
+          mode: options.mode,
+          businessType: currentOrder.businessType,
+          platform: currentOrder.platform,
+          currentMessage: latestMessage,
+          latestMessage,
+          conversationHistory,
+          orderSummary: currentOrder.summary || currentOrder.analysis?.summary || currentOrder.rawMessage,
+          items: currentOrder.itemSummary || formatItemSummary(currentOrder.analysis?.products || []),
+          customerInfo: [currentOrder.customerName, currentOrder.platform, currentOrder.status].filter(Boolean).join(" / "),
+          systemPrompt: settings.systemPrompt,
+          sellerRules: settings.merchantRules,
+          enabledTemplates,
+          knowledgeRules,
+          responseMode: "fast",
+        }),
+      });
+      const data = (await response.json()) as AnalyzeApiResponse;
+      if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
+      console.info("[order-detail/analyze] request succeeded", { ...logBase, httpStatus: response.status });
+      return mapAnalyzeResponse(data);
+    } catch (error) {
+      console.error("[order-detail/analyze] request failed", {
+        ...logBase,
+        httpStatus: response?.status,
+        errorMessage: error instanceof Error ? error.message.slice(0, 180) : safeString(error).slice(0, 180),
+      });
+      throw error;
+    }
   }
 
   async function analyzeFollowUp() {
@@ -152,7 +203,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     setAnalyzing(true);
     setMessage("");
     try {
-      const analysis = await requestAnalysis(buildContextText(order, text), order);
+      const analysis = await requestAnalysis(order, { mode: "continue", chatText: buildContextText(order, text), latestMessage: text });
       const now = new Date().toISOString();
       const nextConversation: ConversationTurn[] = [
         ...(order.conversation || []),
@@ -172,8 +223,9 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       );
       setFollowUpText("");
       setMessage("已结合历史消息重新分析。推荐回复复制后才会写入连续对话。");
-    } catch {
-      setMessage("继续分析失败，请稍后重试");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "请稍后重试";
+      setMessage(`继续分析失败：${detail}`);
     } finally {
       setAnalyzing(false);
     }
@@ -184,21 +236,18 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     setRegenerating(true);
     setMessage("");
     try {
-      const analysis = await requestAnalysis(buildRegenerateText(order), order);
-      const now = new Date().toISOString();
-      updateOrder(
-        {
-          analysis,
-          summary: analysis.summary || order.summary,
-          itemSummary: formatItemSummary(analysis.products) || order.itemSummary,
-          status: mapOrderStatus(analysis.orderStatus, analysis.missingInfo),
-          intentLevel: inferIntentLevel(analysis.urgency, analysis.missingInfo),
-        },
-        createOrderHistoryEvent("reply_generated", "重新生成候选回复", analysis.reply, now),
-      );
+      const analysis = await requestAnalysis(order, { mode: "regenerate", chatText: buildRegenerateText(order) });
+      updateOrder({
+        analysis,
+        summary: analysis.summary || order.summary,
+        itemSummary: formatItemSummary(analysis.products) || order.itemSummary,
+        status: mapOrderStatus(analysis.orderStatus, analysis.missingInfo),
+        intentLevel: inferIntentLevel(analysis.urgency, analysis.missingInfo),
+      });
       setMessage("已重新生成候选回复。复制采用后才会写入连续对话。");
-    } catch {
-      setMessage("重新生成失败，请稍后重试");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "请稍后重试";
+      setMessage(`重新生成失败：${detail}`);
     } finally {
       setRegenerating(false);
     }
@@ -237,9 +286,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   const products = order.analysis?.products || [];
   const itemSummary = products.length > 0 ? formatItemSummary(products) : order.itemSummary;
-  const conversation = order.conversation?.length
-    ? order.conversation
-    : [{ id: `${order.id}_initial`, role: "customer" as const, content: order.rawMessage, createdAt: order.createdAt }];
+  const conversation = getOrderConversation(order);
   const history = order.history || [];
 
   return (
@@ -283,8 +330,8 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <InfoBlock title="商品/服务" content={itemSummary || "待确认"} />
           <InfoBlock title="推荐回复草稿" content={order.analysis?.reply || "暂无"} strong />
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <button className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
-            <button className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
+            <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
+            <button type="button" className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
           </div>
         </Section>
       </div>
@@ -294,7 +341,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <Field label="客户新回复">
             <textarea className={`${textareaClass} min-h-28`} value={followUpText} onChange={(event) => setFollowUpText(event.target.value)} placeholder="例如：那明天中午前能做好吗？可以便宜一点吗？" />
           </Field>
-          <button className={primaryButtonClass} onClick={analyzeFollowUp} disabled={analyzing || !followUpText.trim()}>
+          <button type="button" className={primaryButtonClass} onClick={analyzeFollowUp} disabled={analyzing || !followUpText.trim()}>
             {analyzing ? "分析中..." : "结合历史再分析"}
           </button>
         </div>

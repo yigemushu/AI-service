@@ -6,6 +6,14 @@ import type { BusinessType } from "@/lib/types";
 type AnalyzeRequest = {
   chatText?: string;
   businessType?: BusinessType;
+  mode?: "standard" | "continue" | "regenerate";
+  platform?: string;
+  currentMessage?: string;
+  latestMessage?: string;
+  conversationHistory?: Array<{ role?: string; content?: string; createdAt?: string }>;
+  orderSummary?: string;
+  items?: string;
+  customerInfo?: string;
   sellerRules?: string;
   systemPrompt?: string;
   responseMode?: "fast" | "full";
@@ -34,7 +42,7 @@ type AnalyzeApiResponse = {
   reply: string;
 };
 
-const businessTypes: BusinessType[] = ["sam", "xianyu", "local", "trade"];
+const businessTypes: BusinessType[] = ["sam", "xianyu", "virtual", "local", "trade"];
 
 function safeString(value: unknown) {
   return typeof value === "string" ? value : String(value ?? "");
@@ -45,25 +53,90 @@ function normalizeAnalyzeRequest(value: unknown): AnalyzeRequest {
   const rawBusinessType = safeString(raw.businessType);
   const businessType = businessTypes.includes(rawBusinessType as BusinessType) ? rawBusinessType as BusinessType : "sam";
   const responseMode = raw.responseMode === "full" ? "full" : "fast";
+  const mode = raw.mode === "continue" || raw.mode === "regenerate" ? raw.mode : "standard";
   const enabledTemplates = Array.isArray(raw.enabledTemplates)
     ? raw.enabledTemplates
         .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-        .map((item) => ({ name: safeString(item.name), scenario: safeString(item.scenario), content: safeString(item.content) }))
+        .map((item) => ({ name: safeString(item.name), scenario: safeString(item.scenario), requiredInfo: safeString(item.requiredInfo), content: safeString(item.content) }))
     : [];
   const knowledgeRules = Array.isArray(raw.knowledgeRules)
     ? raw.knowledgeRules
         .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
         .map((item) => ({ title: safeString(item.title), category: safeString(item.category), content: safeString(item.content) }))
     : [];
+  const conversationHistory = Array.isArray(raw.conversationHistory)
+    ? raw.conversationHistory
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map((item) => ({
+          role: safeString(item.role),
+          content: safeString(item.content),
+          createdAt: safeString(item.createdAt),
+        }))
+        .filter((item) => item.content)
+        .slice(-20)
+    : [];
   return {
     chatText: safeString(raw.chatText),
     businessType,
+    mode,
+    platform: safeString(raw.platform),
+    currentMessage: safeString(raw.currentMessage),
+    latestMessage: safeString(raw.latestMessage),
+    conversationHistory,
+    orderSummary: safeString(raw.orderSummary),
+    items: safeString(raw.items),
+    customerInfo: safeString(raw.customerInfo),
     sellerRules: safeString(raw.sellerRules),
     systemPrompt: safeString(raw.systemPrompt),
     responseMode,
     enabledTemplates,
     knowledgeRules,
   };
+}
+
+function buildStructuredContext(input: AnalyzeRequest) {
+  const mode = input.mode || "standard";
+  const history = Array.isArray(input.conversationHistory) ? input.conversationHistory : [];
+  if (
+    mode === "standard" &&
+    history.length === 0 &&
+    !input.platform &&
+    !input.currentMessage &&
+    !input.latestMessage &&
+    !input.orderSummary &&
+    !input.items &&
+    !input.customerInfo
+  ) {
+    return "";
+  }
+
+  const historyText = history.length
+    ? history.map((turn, index) => {
+        const role = safeString(turn.role) || "customer";
+        const createdAt = safeString(turn.createdAt);
+        return `${index + 1}. ${role}${createdAt ? ` @ ${createdAt}` : ""}: ${safeString(turn.content)}`;
+      }).join("\n")
+    : "暂无历史对话";
+
+  const latestMessage = input.currentMessage || input.latestMessage || "";
+  const modeGuide = mode === "continue"
+    ? "这是同一订单的继续分析。必须结合历史对话、订单摘要、已识别服务/商品和最新客户消息判断，不要把最新消息当成全新咨询。只追问仍然缺失的信息。"
+    : mode === "regenerate"
+      ? "这是同一订单的重新生成回复。必须重新调用上下文生成一版新的 reply 草稿，不要复用旧回复；草稿不代表已发送，不要把它当作历史消息。"
+      : "这是普通分析。";
+
+  return [
+    `mode: ${mode}`,
+    `platform: ${input.platform || "未提供"}`,
+    `orderSummary: ${input.orderSummary || "未提供"}`,
+    `items: ${input.items || "未提供"}`,
+    `customerInfo: ${input.customerInfo || "未提供"}`,
+    `latestMessage: ${latestMessage || "未提供"}`,
+    "conversationHistory:",
+    historyText,
+    "",
+    modeGuide,
+  ].join("\n");
 }
 
 const analyzeSchema = {
@@ -227,6 +300,7 @@ function mockAnalyze(input: AnalyzeRequest): AnalyzeApiResponse {
 
 function buildPrompt(input: AnalyzeRequest) {
   const businessType = input.businessType || "sam";
+  const structuredContext = buildStructuredContext(input);
   const templates = input.enabledTemplates?.length
     ? input.enabledTemplates.map((tpl) => `- ${tpl.name}（${tpl.scenario}）\n  需要的信息：${tpl.requiredInfo || "按模板内容判断"}\n  回复模板：${tpl.content}`).join("\n")
     : "暂无启用模板";
@@ -255,6 +329,7 @@ function buildPrompt(input: AnalyzeRequest) {
     "missing_info 要具体列出仍需补充的字段，例如联系方式、收货地址、服务地点、规格、数量、目的港、贸易条款、照片、订单号；虚拟服务则列需求说明、素材、字数/页数、交付格式、截止时间、修改次数、用途/风格。",
     "risk_flags 要覆盖真实经营风险，例如库存、价格、配送时效、包邮/议价、成色/正品、上门排期、售后证据、MOQ、贸易条款、交期；虚拟服务还要覆盖需求不清、范围蔓延、版权/原创承诺、违规代写、无限修改、交付验收边界，不要只写泛泛的风险。",
     "items 要尽量拆分所有商品/服务，数量和单位分开放入 quantity 与 unit；无法确定实物时写待确认商品，无法确定非实体服务时写待确认虚拟服务。",
+    ...(structuredContext ? ["结构化上下文：", structuredContext, ""] : []),
     "客户聊天记录：",
     input.chatText || "",
   ].join("\n");
@@ -651,8 +726,13 @@ export async function POST(request: Request) {
     }
     console.info("[api/analyze] started", {
       requestId,
+      mode: body.mode,
       businessType: body.businessType,
       chatLength: body.chatText.length,
+      historyLength: body.conversationHistory?.length || 0,
+      latestMessageLength: (body.currentMessage || body.latestMessage || "").length,
+      hasKnowledge: Boolean(body.knowledgeRules?.length),
+      hasTemplates: Boolean(body.enabledTemplates?.length),
       templateCount: body.enabledTemplates?.length || 0,
       knowledgeRuleCount: body.knowledgeRules?.length || 0,
       provider: safeString(process.env.AI_PROVIDER || "openai"),
@@ -661,7 +741,7 @@ export async function POST(request: Request) {
     const result = process.env.OPENAI_API_KEY ? await analyzeWithOpenAI(body) : mockAnalyze(body);
     stage = "response_normalize";
     const normalized = normalizeAnalysis(result, body);
-    console.info("[api/analyze] succeeded", { requestId, durationMs: Date.now() - startedAt, itemCount: normalized.items.length });
+    console.info("[api/analyze] succeeded", { requestId, mode: body.mode, durationMs: Date.now() - startedAt, itemCount: normalized.items.length });
     return NextResponse.json(normalized);
   } catch (error) {
     console.error("[api/analyze] failed", {
