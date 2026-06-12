@@ -4,6 +4,7 @@ type AiProviderInput = {
   prompt: string;
   schema: unknown;
   responseMode?: "fast" | "full";
+  minOutputTokens?: number;
 };
 
 type ResponsesApiPayload = {
@@ -50,7 +51,8 @@ export async function callAiProvider(input: AiProviderInput) {
   const provider = getProvider();
   const model = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || "18000");
-  const maxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
+  const configuredMaxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
+  const maxOutputTokens = Math.max(configuredMaxOutputTokens, input.minOutputTokens || 0);
   const baseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 
   if (provider === "openai-compatible") {

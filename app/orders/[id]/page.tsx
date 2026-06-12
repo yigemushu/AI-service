@@ -149,6 +149,17 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType))
       .map(({ title, category, content }) => ({ title: safeString(title), category: safeString(category), content: safeString(content) }));
     const latestMessage = safeString(options.latestMessage);
+    const conciseChatText = options.mode === "continue"
+      ? [
+          currentOrder.summary,
+          currentOrder.itemSummary,
+          latestMessage ? `最新客户消息：${latestMessage}` : "",
+        ].filter(Boolean).join("\n")
+      : [
+          currentOrder.summary,
+          currentOrder.itemSummary,
+          "请基于结构化上下文重新生成一版推荐回复草稿。",
+        ].filter(Boolean).join("\n");
     const logBase = {
       orderId: currentOrder.id,
       mode: options.mode,
@@ -165,7 +176,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chatText: options.chatText,
+          chatText: conciseChatText || options.chatText,
           mode: options.mode,
           businessType: currentOrder.businessType,
           platform: currentOrder.platform,

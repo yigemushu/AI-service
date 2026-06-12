@@ -114,7 +114,7 @@ function buildStructuredContext(input: AnalyzeRequest) {
     ? history.map((turn, index) => {
         const role = safeString(turn.role) || "customer";
         const createdAt = safeString(turn.createdAt);
-        return `${index + 1}. ${role}${createdAt ? ` @ ${createdAt}` : ""}: ${safeString(turn.content)}`;
+        return `${index + 1}. ${role}${createdAt ? ` @ ${createdAt}` : ""}: ${safeString(turn.content).slice(0, 800)}`;
       }).join("\n")
     : "暂无历史对话";
 
@@ -329,6 +329,7 @@ function buildPrompt(input: AnalyzeRequest) {
     "missing_info 要具体列出仍需补充的字段，例如联系方式、收货地址、服务地点、规格、数量、目的港、贸易条款、照片、订单号；虚拟服务则列需求说明、素材、字数/页数、交付格式、截止时间、修改次数、用途/风格。",
     "risk_flags 要覆盖真实经营风险，例如库存、价格、配送时效、包邮/议价、成色/正品、上门排期、售后证据、MOQ、贸易条款、交期；虚拟服务还要覆盖需求不清、范围蔓延、版权/原创承诺、违规代写、无限修改、交付验收边界，不要只写泛泛的风险。",
     "items 要尽量拆分所有商品/服务，数量和单位分开放入 quantity 与 unit；无法确定实物时写待确认商品，无法确定非实体服务时写待确认虚拟服务。",
+    "为了保证接口稳定，summary、customer_intent 和 reply 都要简洁；missing_info、risk_flags、next_action 每项不超过 8 条。",
     ...(structuredContext ? ["结构化上下文：", structuredContext, ""] : []),
     "客户聊天记录：",
     input.chatText || "",
@@ -336,8 +337,32 @@ function buildPrompt(input: AnalyzeRequest) {
 }
 
 async function analyzeWithOpenAI(input: AnalyzeRequest) {
-  const outputText = await callAiProvider({ prompt: buildPrompt(input), responseMode: input.responseMode, schema: analyzeSchema });
-  return JSON.parse(outputText) as AnalyzeApiResponse;
+  const outputText = await callAiProvider({
+    prompt: buildPrompt(input),
+    responseMode: input.responseMode,
+    schema: analyzeSchema,
+    minOutputTokens: input.mode === "continue" || input.mode === "regenerate" ? 1300 : 0,
+  });
+  return parseAnalyzeOutput(outputText);
+}
+
+function parseAnalyzeOutput(outputText: string): AnalyzeApiResponse {
+  const text = safeString(outputText).trim();
+  try {
+    return JSON.parse(text) as AnalyzeApiResponse;
+  } catch (firstError) {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+    const candidate = fenced || text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+    if (candidate && candidate.startsWith("{") && candidate.endsWith("}")) {
+      try {
+        return JSON.parse(candidate) as AnalyzeApiResponse;
+      } catch {
+        // Fall through to the safe diagnostic below.
+      }
+    }
+    const reason = firstError instanceof Error ? firstError.message : safeString(firstError);
+    throw new Error(`AI provider returned invalid JSON: ${reason}; outputLength=${text.length}`);
+  }
 }
 
 function normalizeItems(items: AnalyzeApiItem[]) {
