@@ -24,6 +24,10 @@ function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
 export default function WorkbenchPage() {
   const [chatText, setChatText] = useState(samples.sam);
   const [businessType, setBusinessType] = useState<BusinessType>("sam");
@@ -69,23 +73,34 @@ export default function WorkbenchPage() {
     try {
       const settings = getSettings();
       const enabledTemplates = ensureTemplates()
-        .filter((template) => template.enabled && template.businessType === businessType)
-        .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
+        .filter((template) => Boolean(template) && template.enabled && template.businessType === businessType)
+        .map((template) => ({
+          name: safeString(template.name),
+          scenario: safeString(template.scenario),
+          requiredInfo: safeString(template.requiredInfo),
+          content: safeString(template.content),
+        }));
       const knowledgeRules = ensureKnowledgeRules()
-        .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === businessType))
-        .map(({ title, category, content }) => ({ title, category, content }));
+        .filter((rule) => Boolean(rule) && rule.enabled && (rule.businessType === "all" || rule.businessType === businessType))
+        .map((rule) => ({ title: safeString(rule.title), category: safeString(rule.category), content: safeString(rule.content) }));
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatText, businessType, systemPrompt: settings.systemPrompt, sellerRules: settings.merchantRules, enabledTemplates, knowledgeRules, responseMode: "fast" }),
+        body: JSON.stringify({ chatText: safeString(chatText), businessType, systemPrompt: safeString(settings?.systemPrompt), sellerRules: safeString(settings?.merchantRules), enabledTemplates, knowledgeRules, responseMode: "fast" }),
       });
-      const data = (await response.json()) as AnalyzeApiResponse;
-      if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
+      const responseText = await response.text();
+      let data: AnalyzeApiResponse;
+      try {
+        data = JSON.parse(responseText) as AnalyzeApiResponse;
+      } catch {
+        throw new Error(`HTTP ${response.status}：服务器返回了无法解析的响应`);
+      }
+      if (!response.ok || data.error) throw new Error(`HTTP ${response.status}：${safeString(data.error || response.statusText || "AI 分析失败").slice(0, 120)}`);
       setResult(mapAnalyzeResponse(data));
       setQuickReply("");
-    } catch {
+    } catch (error) {
       setResult(null);
-      setMessage("AI 分析失败，请稍后重试或使用 mock 模式");
+      setMessage(error instanceof Error ? error.message : "AI 分析失败，请稍后重试或使用 mock 模式");
     } finally {
       setLoading(false);
     }
@@ -166,7 +181,7 @@ export default function WorkbenchPage() {
       <Section title="快速分析" description={businessGuides[businessType]}>
         <div className="grid gap-2 sm:grid-cols-4">
           {(Object.keys(businessTypeLabels) as BusinessType[]).map((type) => (
-            <button key={type} className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-amber-100 bg-white text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"}`} onClick={() => changeBusinessType(type)}>
+            <button type="button" key={type} className={`rounded-md border px-3 py-2 text-sm font-semibold transition ${businessType === type ? "border-slate-950 bg-slate-950 text-white" : "border-amber-100 bg-white text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"}`} onClick={() => changeBusinessType(type)}>
               {businessTypeLabels[type]}
             </button>
           ))}
@@ -179,7 +194,7 @@ export default function WorkbenchPage() {
             <Field label="客户聊天记录">
               <textarea className={`${textareaClass} min-h-72 resize-y`} value={chatText} onChange={(event) => setChatText(event.target.value)} />
             </Field>
-            <button className={primaryButtonClass} onClick={analyze} disabled={loading || !chatText.trim()}>
+            <button type="button" className={primaryButtonClass} onClick={analyze} disabled={loading || !chatText.trim()}>
               {loading ? "分析中..." : "生成分析"}
             </button>
           </div>
@@ -205,8 +220,8 @@ export default function WorkbenchPage() {
               <ListBlock title="下一步动作" items={result.nextActions} />
               <OutputBlock title="回复话术" content={result.reply} strong />
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                <button className={secondaryButtonClass} onClick={copyReply} disabled={!result.reply?.trim()}>一键复制回复</button>
-                <button className={primaryButtonClass} onClick={saveOrder}>保存为订单</button>
+                <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!result.reply?.trim()}>一键复制回复</button>
+                <button type="button" className={primaryButtonClass} onClick={saveOrder}>保存为订单</button>
                 <Link className={secondaryButtonClass} href="/orders">查看订单</Link>
               </div>
             </div>
@@ -217,7 +232,7 @@ export default function WorkbenchPage() {
                 <p className="mt-2 whitespace-pre-line">{quickReply}</p>
                 <p className="mt-2 text-xs text-amber-700">AI 正在继续分析完整订单信息，必要时可以先复制这段回复安抚客户。</p>
               </div>
-              <button className={secondaryButtonClass} onClick={copyQuickReply}>先复制快速回复</button>
+              <button type="button" className={secondaryButtonClass} onClick={copyQuickReply}>先复制快速回复</button>
             </div>
           ) : (
             <div className="rounded-md border border-dashed border-slate-300 p-6 text-sm text-slate-500">生成后会在这里展示分析结果。</div>
