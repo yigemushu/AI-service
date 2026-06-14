@@ -22,7 +22,7 @@ function getNewOrderCount() {
 }
 
 function getNewMessageCount() {
-  return getCustomerMessages().filter((message) => message.isNew || message.status === "未处理").length;
+  return getCustomerMessages().filter((message) => message.isNew).length;
 }
 
 export function AppNav() {
@@ -57,11 +57,11 @@ export function AppNav() {
           <Link
             key={item.href}
             href={item.href}
-            className={`relative flex min-h-10 items-center justify-between gap-3 whitespace-nowrap rounded-md px-3 py-2 text-sm font-semibold transition ${active ? "bg-[#111827] text-white shadow-sm" : "text-slate-700 hover:bg-emerald-50 hover:text-emerald-800"}`}
+            className={`relative flex min-h-10 items-center justify-between gap-3 whitespace-nowrap rounded-xl px-3 py-2 text-sm font-semibold transition lg:text-slate-300 ${active ? "bg-slate-950 text-white shadow-sm ring-1 ring-sky-200/70 lg:bg-white/12 lg:ring-white/10" : "text-slate-700 hover:bg-sky-50 hover:text-sky-800 lg:hover:bg-white/10 lg:hover:text-white"}`}
           >
             <span>{item.label}</span>
             {count > 0 ? (
-              <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-semibold leading-none ${active ? "bg-white text-slate-950" : "bg-rose-500 text-white"}`}>
+              <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-semibold leading-none shadow-sm ${active ? "bg-white text-slate-950" : "bg-rose-500 text-white"}`}>
                 {count > 99 ? "99+" : count}
               </span>
             ) : null}

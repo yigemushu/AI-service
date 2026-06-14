@@ -11,10 +11,17 @@ function readBodyToken(body: unknown) {
 
 function isAuthorized(request: NextRequest, bodyToken = "") {
   const token = process.env.INBOX_WEBHOOK_TOKEN;
-  if (!token) return false;
+  if (!token) return isLocalDevelopmentRequest(request);
   const authHeader = request.headers.get("authorization") || "";
   const headerToken = request.headers.get("x-inbox-token") || "";
   return authHeader === `Bearer ${token}` || headerToken === token || bodyToken === token;
+}
+
+function isLocalDevelopmentRequest(request: NextRequest) {
+  const host = request.headers.get("host") || "";
+  const forwardedHost = request.headers.get("x-forwarded-host") || "";
+  const targetHost = forwardedHost || host;
+  return process.env.NODE_ENV !== "production" && /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(targetHost);
 }
 
 function logInbox(event: "start" | "success" | "fail", detail: Record<string, unknown>) {
@@ -35,7 +42,7 @@ function safeBodySummary(body: unknown) {
 
 export async function GET(request: NextRequest) {
   const requestId = crypto.randomUUID();
-  if (!process.env.INBOX_WEBHOOK_TOKEN) {
+  if (!process.env.INBOX_WEBHOOK_TOKEN && !isLocalDevelopmentRequest(request)) {
     logInbox("fail", { requestId, method: "GET", reason: "token_not_configured" });
     return NextResponse.json({ error: "Inbox webhook token is not configured" }, { status: 503 });
   }
@@ -54,7 +61,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const bodyToken = readBodyToken(body);
     logInbox("start", { requestId, method: "POST", ...safeBodySummary(body), hasToken: Boolean(bodyToken || request.headers.get("authorization") || request.headers.get("x-inbox-token")) });
-    if (!process.env.INBOX_WEBHOOK_TOKEN) {
+    if (!process.env.INBOX_WEBHOOK_TOKEN && !isLocalDevelopmentRequest(request)) {
       logInbox("fail", { requestId, method: "POST", reason: "token_not_configured" });
       return NextResponse.json({ error: "Inbox webhook token is not configured" }, { status: 503 });
     }
