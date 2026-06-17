@@ -80,9 +80,12 @@ export default function SettingsPage() {
               type="password"
               value={settings.inboxWebhookToken || ""}
               onChange={(event) => setSettings({ ...settings, inboxWebhookToken: event.target.value })}
-              placeholder="仅保存在本机浏览器 localStorage，用于同步 /api/inbox"
+              placeholder="需要与服务端 .env.local 的 INBOX_WEBHOOK_TOKEN 一致"
             />
           </Field>
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
+            当前 Token 会保存在本浏览器 localStorage，用于消息中心同步和复制给插件。服务端 /api/inbox 不会读取浏览器 localStorage；本地开发请写入项目根目录 <code className="font-mono">.env.local</code> 的 <code className="font-mono">INBOX_WEBHOOK_TOKEN</code> 后重启 <code className="font-mono">npm run dev</code>，云端请写入服务器环境变量后重启 PM2。
+          </div>
           <div className="flex items-center gap-3">
             <button type="button" className={primaryButtonClass} onClick={save}>保存设置</button>
             {saved ? <span className="text-sm font-medium text-emerald-700">已保存</span> : null}
@@ -92,7 +95,7 @@ export default function SettingsPage() {
       <Section title="浏览器插件配置">
         <div className="space-y-4">
           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
-            本地网站用本地 Token，云端网站用云端 Token。插件里填写的网站地址和 Webhook Token 必须来自同一个环境。
+            本地网站用本地 Token，云端网站用云端 Token。插件里填写的网站地址和 Webhook Token 必须来自同一个环境，并且这个 Token 必须已经写入对应服务端环境变量。
           </div>
           <Field label="当前网站地址">
             <div className="flex flex-col gap-2 sm:flex-row">

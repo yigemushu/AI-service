@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function getEnvToken() {
+  return (process.env.INBOX_WEBHOOK_TOKEN || "").trim();
+}
+
 function readToken(request: NextRequest) {
   const authHeader = request.headers.get("authorization") || "";
   const headerToken = request.headers.get("x-inbox-token") || "";
@@ -9,7 +13,7 @@ function readToken(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  const configuredToken = process.env.INBOX_WEBHOOK_TOKEN;
+  const configuredToken = getEnvToken();
   if (!configuredToken) {
     return NextResponse.json({ ok: false, error: "Inbox webhook token is not configured" }, { status: 503 });
   }
