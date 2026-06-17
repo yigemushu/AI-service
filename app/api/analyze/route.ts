@@ -318,6 +318,7 @@ function buildPrompt(input: AnalyzeRequest) {
     "启用话术模板：",
     templates,
     "",
+    "如果最新客户消息是在问问题、解释疑惑、闲聊或确认流程，例如“修改次数是什么意思”“还没看到草稿要不要改”“正常格式可以吗”，reply 必须先直接回答客户问题，不要机械追问所有模板字段；missing_info 只列当前回复后确实还要继续推进订单的信息。",
     "如果有启用话术模板，优先按最匹配模板的“需要的信息”判断 missing_info，并让 reply 参考对应“回复模板”的表达方式。",
     "输出要求：严格返回 JSON。reply 只能是草稿，不要自动发送。不要承诺一定有货、一定送达、最低价或无条件退款。",
     "reply 是给客户看的推荐回复，不是内部分析。请写得像微信真人商家：短、自然、有一点情绪，不要一大段说明。中文场景一般 2-4 行，先接住客户需求，再问缺失信息或说明需要确认。可以少量使用“哦、呀、哈、我帮你看下”，中文回复的 ~ 只放在整段最后一句结尾，不要每句话都加。外贸询盘保持英文商务语气，不使用 ~。",
@@ -407,6 +408,42 @@ function getLatestCustomerSignal(text: string) {
   const index = text.lastIndexOf(marker);
   if (index >= 0) return text.slice(index + marker.length).trim();
   return text;
+}
+
+function isCustomerQuestionTurn(signalText: string, businessType: BusinessType, isVirtualXianyu: boolean) {
+  const signal = signalText.trim();
+  if (!signal) return false;
+  const asksProcessOrClarification = /(修改次数|修改|草稿|格式|什么意思|是什么|怎么改|怎么修改|要不要改|需不需要改|没看到|没看见|没收到|正常.*格式|普通.*格式|流程|怎么弄|怎么操作)/.test(signal);
+  const asksCapability = /(能写吗|能做吗|可以写吗|可以做吗|能不能写|能不能做)/.test(signal);
+  const asksGeneralQuestion = /[?？]|什么意思|是什么|怎么|为什么|要不要|需不需要|可以吗|行吗/.test(signal);
+  const isOrderPush = /(多少钱|报价|价格|费用|怎么收费|多久|什么时候|几天|今天|明天|下单|拍下|买|订|要\s*\d|要[一二两三四五六七八九十]+个)/.test(signal);
+  if (isVirtualXianyu) return asksProcessOrClarification || asksCapability || (asksGeneralQuestion && !isOrderPush);
+  if (businessType === "trade") return false;
+  return asksProcessOrClarification || (asksGeneralQuestion && !isOrderPush);
+}
+
+function buildCustomerQuestionReply(signalText: string, itemText: string, isVirtualXianyu: boolean) {
+  const signal = signalText.trim();
+  const serviceName = itemText || "这个需求";
+  if (/修改次数|要不要改|需不需要改|修改/.test(signal) && /草稿|没看到|没看见|没收到/.test(signal)) {
+    return "没事，你还没看到草稿的话不用先决定要不要修改。\n\n修改次数就是草稿出来后，我按同一个方向帮你调整几轮，比如措辞、语气、细节这些。先按正常文字格式来就行，你看完哪里不合适再跟我说哈~";
+  }
+  if (/修改次数|修改/.test(signal)) {
+    return "修改次数就是草稿出来后，你可以让我按同一个方向调整几轮，比如措辞、语气、细节这些。\n\n不是让你现在就必须确定，先把草稿写出来，你看完哪里不合适再说就行哈~";
+  }
+  if (/草稿|没看到|没看见|没收到/.test(signal)) {
+    return "没事，草稿出来前不用先决定要不要改。\n\n我先按你现在说的内容写一版，你看完后觉得哪里不合适，再告诉我调整就行哈~";
+  }
+  if (/格式|正常.*格式|普通.*格式/.test(signal)) {
+    return "可以的，正常文字格式就行。\n\n我会按一段一段、方便你直接复制发送的形式来写，不做复杂排版哈~";
+  }
+  if (/(能写吗|能做吗|可以写吗|可以做吗|能不能写|能不能做)/.test(signal)) {
+    return `可以写的，我先帮你看下${isVirtualXianyu ? `：${serviceName}` : ""}。\n\n你把想表达的重点和大概经过发我，我会按合适的语气帮你整理哈~`;
+  }
+  if (/怎么收费|多少钱|报价|价格|费用/.test(signal)) {
+    return "价格要看具体内容和工作量，我先帮你确认需求范围后再给你报价。\n\n你把大概内容、字数/页数和什么时候要发我，我看完给你准话哈~";
+  }
+  return "可以的，我先回答你这个问题。\n\n你现在这个情况不用急着一次性把所有信息都补齐，先把最关心的点说清楚，我这边边确认边帮你推进哈~";
 }
 
 function hasVirtualDemandDetail(text: string) {
@@ -512,18 +549,8 @@ function applyTemplateRequiredInfo(missingInfo: string[], input: AnalyzeRequest,
   return { missingInfo: dedupeMissingInfo(next), matchedTemplate };
 }
 
-function replyMentionsMissingInfo(reply: string, missingInfo: string[]) {
-  if (missingInfo.length === 0) return true;
-  return missingInfo.some((item) => {
-    const words = item.split(/[\/、,，\s]+/).filter((word) => word.length >= 2);
-    return words.some((word) => reply.includes(word));
-  });
-}
-
 function applyTemplateReply(reply: string, matchedTemplate: NonNullable<AnalyzeRequest["enabledTemplates"]>[number] | undefined, missingInfo: string[]) {
   if (!matchedTemplate?.content || missingInfo.length === 0) return reply;
-  if (/麻烦你补充一下|我确认工作量后给你报价|我看完再给你准话|我确认下时间和报价后回复|目前你补充的信息我记下了/.test(reply)) return matchedTemplate.content;
-  if (replyMentionsMissingInfo(reply, missingInfo)) return reply;
   return matchedTemplate.content;
 }
 
@@ -697,10 +724,12 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     return !list.some((other) => other.name !== "待确认虚拟服务" && /(写作|文案|检讨|道歉|PPT|简历|设计|翻译|服务|稿|报告|方案)/.test(other.name));
   });
   const isVirtualXianyu = businessType === "virtual" || (businessType === "xianyu" && isVirtualServiceText(text));
+  const latestSignal = getLatestCustomerSignal(text);
+  const shouldAnswerQuestion = isCustomerQuestionTurn(latestSignal, businessType, isVirtualXianyu);
   const enrichedMissingInfo = enrichMissingInfo(normalizeStringList(result.missing_info), text, businessType);
   const templateResult = applyTemplateRequiredInfo(enrichedMissingInfo, input, text, businessType);
-  const missingInfo = isVirtualXianyu ? enforceVirtualMissingInfo(templateResult.missingInfo, text) : templateResult.missingInfo;
-  const matchedTemplate = isVirtualXianyu && templateLooksPhysicalXianyu(templateResult.matchedTemplate) ? undefined : templateResult.matchedTemplate;
+  const missingInfo = shouldAnswerQuestion ? [] : isVirtualXianyu ? enforceVirtualMissingInfo(templateResult.missingInfo, text) : templateResult.missingInfo;
+  const matchedTemplate = shouldAnswerQuestion ? undefined : isVirtualXianyu && templateLooksPhysicalXianyu(templateResult.matchedTemplate) ? undefined : templateResult.matchedTemplate;
   const itemText = items.map((item) => item.name).join("、");
   const riskFlags = new Set(normalizeStringList(result.risk_flags));
   if (items.length > 0 && isVirtualXianyu) riskFlags.add("虚拟服务的工作量、报价、交付格式和修改边界需确认后再回复，不应直接承诺结果。");
@@ -708,7 +737,7 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
   if (/便宜|最低价|砍价|包邮/.test(text)) riskFlags.add("客户正在议价或确认包邮，需要按商家规则确认价格。");
   if (/今天|明天|上午|下午|急|delivery time/i.test(text)) riskFlags.add(isVirtualXianyu ? "客户有交付时效要求，需要确认工作量和是否来得及交付。" : "客户有时效要求，需要确认库存、服务档期或配送能力。");
   if (/成色|正品|验货|不合适|退|退款|没声音/.test(text)) riskFlags.add("闲鱼交易需确认成色、验货、退换和售后边界。");
-  if (isVirtualXianyu) riskFlags.add("虚拟服务需确认需求范围、素材、交付格式、截止时间和修改次数，避免承诺包过、保证原创或无限修改。");
+  if (isVirtualXianyu && !shouldAnswerQuestion) riskFlags.add("虚拟服务需确认需求范围、素材、交付格式、截止时间和修改次数，避免承诺包过、保证原创或无限修改。");
   if (/上门|预约|清洗|保洁|维修|搬家|美甲|家教|拍摄/.test(text)) riskFlags.add("本地服务需确认上门地址、排期、服务范围和最终报价。");
   if (/MOQ|FOB|CIF|DDP|quote|price|lead time|pcs|pieces|shipment/i.test(text)) riskFlags.add("外贸询盘需确认 MOQ、贸易条款、目的港、规格和交期后再正式报价。");
   if (/异味|重新上门|昨天清洗|返工/.test(text)) riskFlags.add("本地服务售后需确认原订单、问题证据和是否需要返工。");
@@ -732,10 +761,12 @@ function normalizeAnalysis(result: AnalyzeApiResponse, input: AnalyzeRequest): A
     missing_info: missingInfo,
     order_status: inferStableStatus(text, businessType, missingInfo),
     risk_flags: Array.from(riskFlags),
-    next_action: normalizeStringList(result.next_action),
-    reply: isVirtualXianyu
-      ? sanitizeReply(applyTemplateReply(String(result.reply || ""), matchedTemplate, missingInfo), true, itemText, text, missingInfo)
-      : applyTemplateReply(sanitizeReply(String(result.reply || ""), false, itemText, text, missingInfo), matchedTemplate, missingInfo),
+    next_action: shouldAnswerQuestion ? ["先回复客户问题", "客户确认后再继续推进订单信息"] : normalizeStringList(result.next_action),
+    reply: shouldAnswerQuestion
+      ? buildCustomerQuestionReply(latestSignal, itemText, isVirtualXianyu)
+      : isVirtualXianyu
+        ? applyTemplateReply(sanitizeReply(String(result.reply || ""), true, itemText, text, missingInfo), matchedTemplate, missingInfo)
+        : applyTemplateReply(sanitizeReply(String(result.reply || ""), false, itemText, text, missingInfo), matchedTemplate, missingInfo),
   };
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
@@ -15,6 +15,8 @@ export default function TemplatesPage() {
   const [businessType, setBusinessType] = useState<"all" | BusinessType>("all");
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState("");
+  const [importMessage, setImportMessage] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const stored = getTemplates();
@@ -33,6 +35,70 @@ export default function TemplatesPage() {
   function restoreDefaults() {
     const next = mergeDefaultTemplates(templates);
     persist(next);
+  }
+
+  function exportTemplates() {
+    const payload = {
+      app: "ai-service-workbench",
+      type: "message-templates",
+      exportedAt: new Date().toISOString(),
+      templates,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `message-templates-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setImportMessage(`已导出 ${templates.length} 条模板`);
+  }
+
+  function normalizeImportedTemplates(value: unknown) {
+    const rawTemplates = Array.isArray(value)
+      ? value
+      : typeof value === "object" && value !== null && Array.isArray((value as { templates?: unknown }).templates)
+        ? (value as { templates: unknown[] }).templates
+        : [];
+
+    const now = new Date().toISOString();
+    return rawTemplates.flatMap((item): MessageTemplate[] => {
+      if (typeof item !== "object" || item === null) return [];
+      const candidate = item as Partial<MessageTemplate>;
+      if (!candidate.name?.trim() || !candidate.content?.trim()) return [];
+      const business = candidate.businessType && candidate.businessType in businessTypeLabels ? candidate.businessType : "sam";
+      return [{
+        id: candidate.id?.trim() || createId("tpl"),
+        name: candidate.name.trim(),
+        businessType: business,
+        scenario: candidate.scenario?.trim() || "导入模板",
+        requiredInfo: candidate.requiredInfo?.trim() || "",
+        content: candidate.content.trim(),
+        enabled: candidate.enabled !== false,
+        createdAt: candidate.createdAt || now,
+        updatedAt: now,
+      }];
+    });
+  }
+
+  async function importTemplates(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const imported = normalizeImportedTemplates(parsed);
+      if (imported.length === 0) {
+        setImportMessage("导入失败：没有找到可用模板");
+        return;
+      }
+      const importedIds = new Set(imported.map((template) => template.id));
+      persist([...imported, ...templates.filter((template) => !importedIds.has(template.id))]);
+      setImportMessage(`已导入 ${imported.length} 条模板`);
+    } catch {
+      setImportMessage("导入失败：文件不是有效的 JSON 模板包");
+    } finally {
+      event.target.value = "";
+    }
   }
 
   function submit() {
@@ -91,8 +157,14 @@ export default function TemplatesPage() {
             </select>
           </Field>
           </div>
-          <button className={secondaryButtonClass} onClick={restoreDefaults}>补齐默认模板</button>
+          <div className="flex flex-wrap gap-2">
+            <button className={secondaryButtonClass} onClick={restoreDefaults}>补齐默认模板</button>
+            <button className={secondaryButtonClass} onClick={exportTemplates} disabled={templates.length === 0}>导出模板包</button>
+            <button className={secondaryButtonClass} onClick={() => fileInputRef.current?.click()}>导入模板包</button>
+            <input ref={fileInputRef} className="hidden" type="file" accept="application/json,.json" onChange={importTemplates} />
+          </div>
         </div>
+        {importMessage ? <div className="mb-4 rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{importMessage}</div> : null}
         <div className="grid gap-3 lg:grid-cols-2">
           {filtered.map((template) => (
             <article key={template.id} className="rounded-md border border-slate-200 p-4">

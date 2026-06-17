@@ -30,10 +30,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!authed) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f7f1e8] px-4">
-        <div className="w-full max-w-md rounded-lg border border-amber-100 bg-white p-6 shadow-xl shadow-amber-100/60">
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,#dff3ff,transparent_32%),linear-gradient(135deg,#f8fbff,#eef4fb)] px-4">
+        <div className="w-full max-w-md rounded-2xl border border-white/80 bg-white/90 p-6 shadow-2xl shadow-sky-200/50 ring-1 ring-slate-100 backdrop-blur">
           <div className="mb-6">
-            <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Demo 工作台</div>
+            <div className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">Demo 工作台</div>
             <div className="mt-3 text-2xl font-semibold text-slate-950">AI 客服接单助手</div>
             <p className="mt-2 text-sm text-slate-500">集中处理客户消息、AI 分析订单、人工确认后回复。</p>
           </div>
@@ -66,18 +66,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f1e8]">
-      <aside className="border-b border-amber-100 bg-white/95 backdrop-blur lg:fixed lg:inset-y-0 lg:left-0 lg:w-64 lg:border-b-0 lg:border-r">
+    <div className="min-h-screen">
+      <aside className="border-b border-slate-200 bg-white/95 backdrop-blur lg:fixed lg:inset-y-0 lg:left-0 lg:w-72 lg:border-b-0 lg:border-r lg:border-slate-200/70 lg:bg-slate-950">
         <div className="flex h-full flex-col">
           <div className="px-5 py-5">
             <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-lg bg-[#111827] text-base font-black text-white">AI</div>
+              <div className="flex size-11 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 via-cyan-400 to-emerald-300 text-base font-black text-slate-950 shadow-lg shadow-cyan-500/25">AI</div>
               <div>
-                <div className="text-lg font-semibold text-slate-950">客服接单台</div>
-                <div className="text-xs font-medium text-slate-500">半自动 · 人工确认</div>
+                <div className="text-lg font-semibold text-slate-950 lg:text-white">客服接单台</div>
+                <div className="text-xs font-medium text-slate-500 lg:text-slate-400">半自动 · 人工确认</div>
               </div>
             </div>
-            <div className="mt-4 rounded-lg bg-emerald-50 px-3 py-3 text-xs text-emerald-800">
+            <div className="mt-4 rounded-2xl border border-sky-200/60 bg-sky-50 px-3 py-3 text-xs leading-5 text-sky-800 lg:border-white/10 lg:bg-white/10 lg:text-slate-200">
               新消息进入这里，AI 先分析，你确认后再复制回复。
             </div>
           </div>
@@ -87,8 +87,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </aside>
-      <main className="lg:pl-64">
-        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">{children}</div>
+      <main className="lg:pl-72">
+        <div className="mx-auto max-w-[1480px] px-4 py-5 sm:px-6 lg:px-8">{children}</div>
       </main>
     </div>
   );

@@ -9,8 +9,20 @@ function readBodyToken(body: unknown) {
   return typeof token === "string" ? token : "";
 }
 
+function getEnvToken() {
+  return (process.env.INBOX_WEBHOOK_TOKEN || "").trim();
+}
+
+function getAuthDebug(request: NextRequest, bodyToken = "") {
+  return {
+    hasEnvToken: Boolean(getEnvToken()),
+    hasSettingsToken: false,
+    receivedToken: Boolean(bodyToken || request.headers.get("authorization") || request.headers.get("x-inbox-token")),
+  };
+}
+
 function isAuthorized(request: NextRequest, bodyToken = "") {
-  const token = process.env.INBOX_WEBHOOK_TOKEN;
+  const token = getEnvToken();
   if (!token) return false;
   const authHeader = request.headers.get("authorization") || "";
   const headerToken = request.headers.get("x-inbox-token") || "";
@@ -35,12 +47,13 @@ function safeBodySummary(body: unknown) {
 
 export async function GET(request: NextRequest) {
   const requestId = crypto.randomUUID();
-  if (!process.env.INBOX_WEBHOOK_TOKEN) {
-    logInbox("fail", { requestId, method: "GET", reason: "token_not_configured" });
+  const authDebug = getAuthDebug(request);
+  if (!getEnvToken()) {
+    logInbox("fail", { requestId, method: "GET", reason: "token_not_configured", ...authDebug });
     return NextResponse.json({ error: "Inbox webhook token is not configured" }, { status: 503 });
   }
   if (!isAuthorized(request)) {
-    logInbox("fail", { requestId, method: "GET", reason: "unauthorized" });
+    logInbox("fail", { requestId, method: "GET", reason: "unauthorized", ...authDebug });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const messages = await getServerInboxMessages();
@@ -53,13 +66,14 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const bodyToken = readBodyToken(body);
-    logInbox("start", { requestId, method: "POST", ...safeBodySummary(body), hasToken: Boolean(bodyToken || request.headers.get("authorization") || request.headers.get("x-inbox-token")) });
-    if (!process.env.INBOX_WEBHOOK_TOKEN) {
-      logInbox("fail", { requestId, method: "POST", reason: "token_not_configured" });
+    const authDebug = getAuthDebug(request, bodyToken);
+    logInbox("start", { requestId, method: "POST", ...safeBodySummary(body), ...authDebug });
+    if (!getEnvToken()) {
+      logInbox("fail", { requestId, method: "POST", reason: "token_not_configured", ...authDebug });
       return NextResponse.json({ error: "Inbox webhook token is not configured" }, { status: 503 });
     }
     if (!isAuthorized(request, bodyToken)) {
-      logInbox("fail", { requestId, method: "POST", reason: "unauthorized" });
+      logInbox("fail", { requestId, method: "POST", reason: "unauthorized", ...authDebug });
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const message = await addServerInboxMessage(body);
@@ -73,7 +87,15 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  if (!isAuthorized(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const authDebug = getAuthDebug(request);
+  if (!getEnvToken()) {
+    logInbox("fail", { method: "DELETE", reason: "token_not_configured", ...authDebug });
+    return NextResponse.json({ error: "Inbox webhook token is not configured" }, { status: 503 });
+  }
+  if (!isAuthorized(request)) {
+    logInbox("fail", { method: "DELETE", reason: "unauthorized", ...authDebug });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   try {
     const body = await request.json();
     const result = await deleteServerInboxCustomer(body);

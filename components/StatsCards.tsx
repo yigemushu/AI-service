@@ -31,7 +31,7 @@ export function StatsCards({ stats, activeKey, onSelect }: StatsCardsProps) {
 
         if (!onSelect) {
           return (
-            <div key={item.key} className="rounded-lg border border-amber-100 bg-white p-4 shadow-sm shadow-amber-100/40">
+            <div key={item.key} className="rounded-2xl border border-white bg-white/90 p-4 shadow-lg shadow-slate-200/50 ring-1 ring-slate-100">
               {content}
             </div>
           );
@@ -41,7 +41,7 @@ export function StatsCards({ stats, activeKey, onSelect }: StatsCardsProps) {
           <button
             key={item.key}
             type="button"
-            className={`rounded-lg border p-4 text-left shadow-sm transition ${active ? "border-slate-950 bg-slate-950 shadow-slate-300/40" : "border-amber-100 bg-white shadow-amber-100/40 hover:-translate-y-0.5 hover:border-emerald-200 hover:bg-emerald-50"}`}
+            className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${active ? "border-slate-950 bg-slate-950 shadow-slate-300/60" : "border-white bg-white/90 shadow-slate-200/50 hover:border-sky-100 hover:bg-sky-50/70"}`}
             onClick={() => onSelect(item.key)}
           >
             {content}

@@ -5,11 +5,11 @@ import { useRouter } from "next/navigation";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
-import { businessTypeLabels } from "@/lib/constants";
+import { businessTypeLabels, defaultKnowledgeRules, mergeDefaultTemplates } from "@/lib/constants";
 import { formatItemSummary } from "@/lib/format";
 import { buildOrderTitle, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
-import { createId, getCustomerMessages, getOrders, getRecognitionExperiences, getSettings, saveCustomerMessages, saveOrders, saveRecognitionExperiences } from "@/lib/storage";
-import type { AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, RecognitionExperience, SourcePlatform } from "@/lib/types";
+import { createId, getCustomerMessages, getKnowledgeRules, getOrders, getRecognitionExperiences, getSettings, getTemplates, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveRecognitionExperiences, saveTemplates } from "@/lib/storage";
+import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, RecognitionExperience, SourcePlatform } from "@/lib/types";
 
 type MainColumn = "highIntent" | "sam" | "xianyu" | "local" | "trade" | "closed" | "archived";
 
@@ -180,7 +180,7 @@ function mergeCustomerMessages(existing: CustomerMessage[], incoming: CustomerMe
 }
 
 function isUnread(message: CustomerMessage) {
-  return message.isNew || message.status === "未处理" || message.status === "待补信息";
+  return message.isNew;
 }
 
 function isArchived(message: CustomerMessage) {
@@ -374,18 +374,37 @@ function columnForBusinessType(value: BusinessType): MainColumn {
   if (value === "virtual") return "xianyu";
   return value;
 }
+
+function getEffectiveBusinessType(group: CustomerFolderGroup): BusinessType {
+  if (group.latest.businessType === "xianyu" && groupLooksLikeVirtualService(group)) return "virtual";
+  return group.latest.businessType;
+}
+
 function getSubCategory(message: CustomerMessage, column: MainColumn) {
   if (column === "highIntent") return businessTypeLabels[message.businessType];
   if (column === "xianyu") {
-    if (isVirtualXianyu(message)) return "虚拟服务";
+    if (message.businessType === "virtual" || isVirtualXianyu(message)) return "闲鱼-虚拟货";
     if (message.status === "无效咨询") return "售后/纠纷";
-    return "实物买卖";
+    return "闲鱼-实体货";
   }
   if (column === "closed") return businessTypeLabels[message.businessType];
   if (column === "archived") return businessTypeLabels[message.businessType];
   if (message.status === "待补信息") return "待补信息";
   if (message.status === "未处理" || message.isNew) return "新消息";
   return "跟进中";
+}
+
+function getColumnTheme(column: MainColumn) {
+  const themes: Record<MainColumn, { badge: string; panel: string; chip: string }> = {
+    highIntent: { badge: "bg-rose-50 text-rose-700", panel: "from-rose-50 to-white", chip: "bg-rose-100 text-rose-700" },
+    sam: { badge: "bg-sky-50 text-sky-700", panel: "from-sky-50 to-white", chip: "bg-sky-100 text-sky-700" },
+    xianyu: { badge: "bg-amber-50 text-amber-700", panel: "from-amber-50 to-white", chip: "bg-amber-100 text-amber-800" },
+    local: { badge: "bg-emerald-50 text-emerald-700", panel: "from-emerald-50 to-white", chip: "bg-emerald-100 text-emerald-700" },
+    trade: { badge: "bg-indigo-50 text-indigo-700", panel: "from-indigo-50 to-white", chip: "bg-indigo-100 text-indigo-700" },
+    closed: { badge: "bg-slate-100 text-slate-700", panel: "from-slate-50 to-white", chip: "bg-slate-200 text-slate-700" },
+    archived: { badge: "bg-zinc-100 text-zinc-700", panel: "from-zinc-50 to-white", chip: "bg-zinc-200 text-zinc-700" },
+  };
+  return themes[column];
 }
 
 function groupByFolder(messages: CustomerMessage[]) {
@@ -406,11 +425,11 @@ function makeFallbackAnalysis(group: CustomerFolderGroup): AnalyzeResult {
   const latest = group.latest;
   const productName = latest.productName || latest.productGuess || "待确认需求";
   return {
-    customerIntent: latest.analysis?.customerIntent || "客户发来新咨询，等待在客户订单中分析。",
+    customerIntent: latest.analysis?.customerIntent || "客户发来新咨询，已从消息中心进入订单处理。",
     products: latest.analysis?.products || [{ name: productName, quantity: "1", unit: "项", notes: "从消息中心进入订单处理", confidence: productName === "待确认需求" ? "低" : "中" }],
-    missingInfo: latest.analysis?.missingInfo || ["需要在客户订单中结合完整聊天分析"],
+    missingInfo: latest.analysis?.missingInfo || [],
     risks: latest.analysis?.risks || ["请先核对客户真实需求，不要自动承诺价格、时效或结果。"],
-    nextActions: latest.analysis?.nextActions || ["进入客户订单处理", "结合历史消息生成推荐回复"],
+    nextActions: latest.analysis?.nextActions || ["查看客户订单并确认推荐回复"],
     reply: latest.analysis?.reply || "我先看下你的需求，确认好后回复你哈~",
     summary: latest.analysis?.summary || latest.rawMessage.slice(0, 80),
     customerName: latest.customerName,
@@ -420,8 +439,84 @@ function makeFallbackAnalysis(group: CustomerFolderGroup): AnalyzeResult {
   };
 }
 
-function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order | undefined, now: string, forcedStatus?: Order["status"]) {
-  const analysis = existingOrder?.analysis || group.latest.analysis || makeFallbackAnalysis(group);
+function ensureTemplates() {
+  const existing = getTemplates();
+  const next = mergeDefaultTemplates(existing);
+  if (next.length !== existing.length) saveTemplates(next);
+  return next;
+}
+
+function ensureKnowledgeRules() {
+  const existing = getKnowledgeRules();
+  if (existing.length > 0) return existing;
+  saveKnowledgeRules(defaultKnowledgeRules);
+  return defaultKnowledgeRules;
+}
+
+function buildFolderAnalysisText(group: CustomerFolderGroup, confirmedProductName = "") {
+  const messages = group.messages
+    .slice()
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((message, index) => `${index + 1}. 客户消息：${message.rawMessage}`)
+    .join("\n");
+  return [
+    "下面是同一个客户文件夹里的历史消息。请直接基于这些消息生成客户订单分析和推荐回复。",
+    "不要要求商家再点一次生成推荐回复；reply 字段必须给出可以直接复制给客户的草稿。",
+    "如果客户已经补充过信息，不要重复追问；只追问仍然缺少、会影响报价或交付的信息。",
+    confirmedProductName ? `消息中心已确认商品/服务：${confirmedProductName}` : "",
+    "",
+    `客户：${group.latest.customerName || group.folder}`,
+    `平台：${group.latest.platform}`,
+    `业务类型：${businessTypeLabels[group.latest.businessType]}`,
+    "",
+    "历史消息：",
+    messages,
+  ].filter(Boolean).join("\n");
+}
+
+function groupLooksLikeVirtualService(group: CustomerFolderGroup, confirmedProductName = "") {
+  const text = [
+    confirmedProductName,
+    group.latest.productName,
+    group.latest.productGuess,
+    group.latest.analysis?.summary,
+    group.latest.analysis?.customerIntent,
+    ...group.messages.map((message) => message.rawMessage),
+  ].filter(Boolean).join("\n");
+  return isVirtualServiceText(text);
+}
+
+async function requestFolderAnalysis(group: CustomerFolderGroup, confirmedProductName = "") {
+  const settings = getSettings();
+  const effectiveBusinessType: BusinessType = group.latest.businessType === "xianyu" && groupLooksLikeVirtualService(group, confirmedProductName) ? "virtual" : group.latest.businessType;
+  const useVirtualTemplates = effectiveBusinessType === "virtual";
+  const enabledTemplates = ensureTemplates()
+    .filter((template) => template.enabled && (template.businessType === effectiveBusinessType || (useVirtualTemplates && template.businessType === "virtual")))
+    .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
+  const knowledgeRules = ensureKnowledgeRules()
+    .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === effectiveBusinessType || (useVirtualTemplates && rule.businessType === "virtual")))
+    .map(({ title, category, content }) => ({ title, category, content }));
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chatText: buildFolderAnalysisText(group, confirmedProductName),
+      businessType: effectiveBusinessType,
+      systemPrompt: settings.systemPrompt,
+      sellerRules: settings.merchantRules,
+      enabledTemplates,
+      knowledgeRules,
+      responseMode: "fast",
+    }),
+  });
+  const data = (await response.json()) as AnalyzeApiResponse;
+  if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
+  return mapAnalyzeResponse(data);
+}
+
+function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order | undefined, now: string, forcedStatus?: Order["status"], analysisOverride?: AnalyzeResult) {
+  const analysis = analysisOverride || existingOrder?.analysis || group.latest.analysis || makeFallbackAnalysis(group);
+  const effectiveBusinessType = getEffectiveBusinessType(group);
   const confirmedProductName = group.latest.productName || group.latest.productGuess || "";
   const products = confirmedProductName && confirmedProductName !== "待确认需求" ? [{ name: confirmedProductName, quantity: "1", unit: "项", notes: "来自消息中心商品识别", confidence: group.latest.productConfirmed ? "高" as const : "中" as const }] : analysis.products;
   const nextAnalysis = { ...analysis, products };
@@ -438,7 +533,7 @@ function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order |
     customerFolder: group.folder,
     customerName: group.latest.customerName || analysis.customerName || group.folder,
     platform: group.latest.platform || analysis.platform || "未识别",
-    businessType: group.latest.businessType,
+    businessType: effectiveBusinessType,
     summary: nextAnalysis.summary,
     itemSummary,
     status: forcedStatus || existingOrder?.status || mapOrderStatus(nextAnalysis.orderStatus, nextAnalysis.missingInfo),
@@ -473,6 +568,7 @@ export default function MessagesPage() {
   const [businessType, setBusinessType] = useState<BusinessType>("xianyu");
   const [sourceUrl, setSourceUrl] = useState("");
   const [notice, setNotice] = useState("");
+  const [processingFolder, setProcessingFolder] = useState("");
 
   const columnMessages = useMemo(() => messages.filter((message) => belongsToColumn(message, activeColumn, orders)), [messages, activeColumn, orders]);
   const subGroups = useMemo(() => {
@@ -489,6 +585,7 @@ export default function MessagesPage() {
   }, [subGroups, selectedFolder]);
   const selectedOrder = selectedGroup ? orders.find((order) => order.id === selectedGroup.latest.linkedOrderId) || orders.find((order) => (order.customerFolder || order.customerName) === selectedGroup.folder && order.platform === selectedGroup.latest.platform) : undefined;
   const selectedGuess = selectedGroup ? inferProductGuess(selectedGroup, recognitionExperiences) : undefined;
+  const selectedSubCategory = selectedGroup ? getSubCategory(selectedGroup.latest, activeColumn) : "";
 
   useEffect(() => {
     setEditedProductName(selectedGuess?.productName || "");
@@ -508,6 +605,14 @@ export default function MessagesPage() {
   function persistRecognitionExperiences(next: RecognitionExperience[]) {
     setRecognitionExperiences(next);
     saveRecognitionExperiences(next);
+  }
+
+  function selectFolder(folder: string) {
+    setSelectedFolder(folder);
+    const hasUnread = messages.some((message) => getFolderName(message) === folder && message.isNew);
+    if (!hasUnread) return;
+    const now = new Date().toISOString();
+    persistMessages(messages.map((message) => (getFolderName(message) === folder ? { ...message, isNew: false, updatedAt: now } : message)));
   }
 
   function updateFolderProduct(group: CustomerFolderGroup, productName: string, status: CustomerMessage["productRecognitionStatus"], guess: ProductGuess, confirmed: boolean) {
@@ -712,14 +817,16 @@ export default function MessagesPage() {
     setNotice(`已移回未成交待跟进：${group.folder}`);
   }
 
-  function openOrderProcessing(group: CustomerFolderGroup) {
+  async function openOrderProcessing(group: CustomerFolderGroup) {
     const now = new Date().toISOString();
     const guess = inferProductGuess(group, recognitionExperiences);
+    const effectiveBusinessType = getEffectiveBusinessType(group);
     const groupForOrder: CustomerFolderGroup = guess.autoConfirm
       ? {
           ...group,
           latest: {
             ...group.latest,
+            businessType: effectiveBusinessType,
             productName: guess.productName,
             productGuess: guess.productName,
             productConfidence: guess.confidence,
@@ -729,6 +836,7 @@ export default function MessagesPage() {
           },
           messages: group.messages.map((message) => ({
             ...message,
+            businessType: effectiveBusinessType,
             productName: guess.productName,
             productGuess: guess.productName,
             productConfidence: guess.confidence,
@@ -737,9 +845,24 @@ export default function MessagesPage() {
             productConfirmed: true,
           })),
         }
-      : group;
+      : {
+          ...group,
+          latest: { ...group.latest, businessType: effectiveBusinessType },
+          messages: group.messages.map((message) => ({ ...message, businessType: effectiveBusinessType })),
+        };
     const existingOrder = selectedOrder;
-    const nextOrder = buildOrderFromFolder(groupForOrder, existingOrder, now);
+    setProcessingFolder(group.folder);
+    setNotice("正在生成客户订单和推荐回复...");
+    let analysis: AnalyzeResult | undefined;
+    try {
+      analysis = await requestFolderAnalysis(groupForOrder, guess.autoConfirm ? guess.productName : groupForOrder.latest.productName || groupForOrder.latest.productGuess || "");
+    } catch {
+      analysis = undefined;
+      setNotice("AI 推荐回复生成失败，已先进入客户订单并保留兜底回复。");
+    } finally {
+      setProcessingFolder("");
+    }
+    const nextOrder = buildOrderFromFolder(groupForOrder, existingOrder, now, undefined, analysis);
     const orderId = nextOrder.id;
     persistOrders(existingOrder ? orders.map((order) => (order.id === existingOrder.id ? nextOrder : order)) : [nextOrder, ...orders]);
     persistMessages(
@@ -747,6 +870,7 @@ export default function MessagesPage() {
         getFolderName(message) === group.folder
           ? {
               ...message,
+              businessType: effectiveBusinessType,
               ...(guess.autoConfirm
                 ? {
                     productName: guess.productName,
@@ -774,14 +898,15 @@ export default function MessagesPage() {
   }
 
   const activeColumnInfo = mainColumns.find((item) => item.id === activeColumn) || mainColumns[0];
+  const activeTheme = getColumnTheme(activeColumn);
 
   return (
     <div className="space-y-5">
-      <header className="overflow-hidden rounded-lg border border-amber-100 bg-white shadow-sm shadow-amber-100/50">
-        <div className="grid gap-4 p-5 lg:grid-cols-[1.2fr_0.8fr] lg:p-6">
+      <header className={`overflow-hidden rounded-3xl border border-white/80 bg-gradient-to-br ${activeTheme.panel} shadow-xl shadow-slate-200/70 ring-1 ring-slate-100`}>
+        <div className="grid gap-5 p-5 lg:grid-cols-[1.2fr_0.8fr] lg:p-7">
           <div>
-            <div className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">客户文件夹总览</div>
-            <h1 className="mt-3 text-2xl font-semibold text-slate-950 lg:text-3xl">消息中心</h1>
+            <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${activeTheme.badge}`}>客户文件夹总览</div>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 lg:text-4xl">消息中心</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               这里专门看所有客户文件夹和分类。新消息先进消息中心，真正的 AI 分析、推荐回复和跟进处理放到客户订单里完成。
             </p>
@@ -803,15 +928,16 @@ export default function MessagesPage() {
               {mainColumns.map((column) => {
                 const list = messages.filter((message) => belongsToColumn(message, column.id, orders));
                 const unread = list.filter(isUnread).length;
+                const theme = getColumnTheme(column.id);
                 return (
                   <button
                     key={column.id}
-                    className={`w-full rounded-lg border p-3 text-left transition ${activeColumn === column.id ? "border-slate-950 bg-slate-950 text-white" : "border-amber-100 bg-white hover:bg-emerald-50"}`}
+                    className={`w-full rounded-2xl border p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${activeColumn === column.id ? "border-slate-950 bg-slate-950 text-white shadow-slate-300/60" : "border-white bg-white hover:border-sky-100 hover:bg-sky-50/70"}`}
                     onClick={() => selectColumn(column.id)}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold">{column.label}</span>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${activeColumn === column.id ? "bg-white text-slate-950" : unread ? "bg-rose-100 text-rose-700" : "bg-amber-50 text-slate-600"}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${activeColumn === column.id ? "bg-white text-slate-950" : unread ? "bg-rose-500 text-white" : theme.chip}`}>
                         {unread || list.length}
                       </span>
                     </div>
@@ -866,8 +992,8 @@ export default function MessagesPage() {
                 {subGroups.map((subGroup) => (
                   <div key={subGroup.name}>
                     <div className="mb-2 flex items-center justify-between">
-                      <h2 className="text-base font-semibold text-slate-950">{subGroup.name}</h2>
-                      <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-slate-600">{subGroup.groups.length} 个客户</span>
+                      <h2 className="inline-flex items-center rounded-full bg-white px-3 py-1 text-base font-semibold text-slate-950 shadow-sm ring-1 ring-slate-100">{subGroup.name}</h2>
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${activeTheme.chip}`}>{subGroup.groups.length} 个客户</span>
                     </div>
                     <div className="grid gap-3 lg:grid-cols-2">
                       {subGroup.groups.map((group) => {
@@ -876,15 +1002,15 @@ export default function MessagesPage() {
                         return (
                           <button
                             key={group.folder}
-                            className={`rounded-lg border p-4 text-left transition ${active ? "border-slate-950 bg-slate-950 text-white" : "border-amber-100 bg-white hover:bg-emerald-50"}`}
-                            onClick={() => setSelectedFolder(group.folder)}
+                            className={`rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${active ? "border-slate-950 bg-slate-950 text-white shadow-slate-300/70" : "border-white bg-white/95 hover:border-sky-100 hover:bg-white"}`}
+                            onClick={() => selectFolder(group.folder)}
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div>
                                 <div className="font-semibold">{group.folder}</div>
-                                <div className={`mt-1 text-xs ${active ? "text-slate-200" : "text-slate-500"}`}>{group.latest.platform} · {businessTypeLabels[group.latest.businessType]} · {group.messages.length} 条消息</div>
+                                <div className={`mt-1 text-xs ${active ? "text-slate-200" : "text-slate-500"}`}>{group.latest.platform} · {getSubCategory(group.latest, activeColumn)} · {group.messages.length} 条消息</div>
                               </div>
-                              {unread ? <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">{unread}</span> : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${active ? "bg-white text-slate-950" : "bg-emerald-50 text-emerald-700"}`}>已读</span>}
+                              {unread ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-xs font-bold text-white shadow-sm shadow-rose-200">{unread}</span> : <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${active ? "bg-white text-slate-950" : "bg-emerald-50 text-emerald-700"}`}>已读</span>}
                             </div>
                             <div className={`mt-3 line-clamp-2 text-sm leading-6 ${active ? "text-white" : "text-slate-700"}`}>{group.latest.rawMessage}</div>
                           </button>
@@ -907,11 +1033,11 @@ export default function MessagesPage() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <InfoPill label="客户昵称" value={selectedGroup.latest.customerName} />
                     <InfoPill label="来源平台" value={String(selectedGroup.latest.platform)} />
-                    <InfoPill label="业务类型" value={businessTypeLabels[selectedGroup.latest.businessType]} />
+                    <InfoPill label="业务类型" value={selectedSubCategory || businessTypeLabels[selectedGroup.latest.businessType]} />
                     <InfoPill label="订单状态" value={selectedOrder ? selectedOrder.status : "未进入订单"} />
                   </div>
                   {selectedGuess ? (
-                    <div className="rounded-lg border border-amber-100 bg-[#fffaf2] p-4">
+                    <div className={`rounded-2xl border border-white bg-gradient-to-br ${activeTheme.panel} p-4 shadow-sm ring-1 ring-slate-100`}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-sm font-semibold text-slate-950">商品/服务识别</div>
@@ -921,13 +1047,13 @@ export default function MessagesPage() {
                           {selectedGuess.source}
                         </span>
                       </div>
-                      <div className="mt-3 rounded-md border border-amber-100 bg-white p-3">
+                      <div className="mt-3 rounded-xl border border-white bg-white/80 p-3 shadow-sm">
                         <div className="text-xs font-semibold text-slate-500">当前识别</div>
                         <div className="mt-1 text-sm font-semibold text-slate-950">{selectedGuess.productName}</div>
                         <div className="mt-1 text-xs text-slate-500">分类：{selectedGuess.subCategory} · 置信度：{Math.round(selectedGuess.confidence * 100)}%</div>
                       </div>
                       {selectedGuess.autoConfirm || selectedGroup.latest.productConfirmed ? (
-                        <div className="mt-3 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
+                        <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">
                           {selectedGuess.autoConfirm ? "这类需求已经多次确认正确，后续会自动识别。" : "这个客户文件夹已人工确认商品/服务。"}
                         </div>
                       ) : (
@@ -942,7 +1068,9 @@ export default function MessagesPage() {
                     </div>
                   ) : null}
                   <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                    <button className={primaryButtonClass} onClick={() => openOrderProcessing(selectedGroup)}>进入客户订单处理</button>
+                    <button className={primaryButtonClass} onClick={() => openOrderProcessing(selectedGroup)} disabled={processingFolder === selectedGroup.folder}>
+                      {processingFolder === selectedGroup.folder ? "生成推荐回复中..." : "进入客户订单处理"}
+                    </button>
                     {activeColumn === "closed" ? (
                       <button className={secondaryButtonClass} onClick={() => markFolderUnclosed(selectedGroup)}>未成交</button>
                     ) : (
@@ -953,9 +1081,9 @@ export default function MessagesPage() {
                   </div>
                   {selectedOrder ? <div className="rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">已连接客户订单：{selectedOrder.orderTitle || selectedOrder.customerName}</div> : null}
                 </div>
-                <div className="rounded-lg border border-amber-100 bg-[#fffaf2] p-4">
+                <div className={`rounded-2xl border border-white bg-gradient-to-br ${activeTheme.panel} p-4 shadow-sm ring-1 ring-slate-100`}>
                   <div className="text-sm font-semibold text-slate-950">最近消息</div>
-                  <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{selectedGroup.latest.rawMessage}</p>
+                  <p className="mt-3 whitespace-pre-line rounded-2xl bg-white/80 p-4 text-sm leading-6 text-slate-700 shadow-sm">{selectedGroup.latest.rawMessage}</p>
                 </div>
               </div>
 
@@ -963,7 +1091,7 @@ export default function MessagesPage() {
                 <div className="mb-2 text-sm font-semibold text-slate-800">文件夹消息记录</div>
                 <div className="space-y-3">
                   {selectedGroup.messages.map((message) => (
-                    <div key={message.id} className="rounded-md border border-amber-100 bg-white p-3 text-sm">
+                    <div key={message.id} className="rounded-2xl border border-white bg-white/90 p-3 text-sm shadow-sm ring-1 ring-slate-100">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-semibold text-slate-950">{message.customerName || selectedGroup.folder}</div>
                         <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-slate-600">{message.status}</span>
@@ -980,6 +1108,23 @@ export default function MessagesPage() {
       </div>
     </div>
   );
+}
+
+function mapAnalyzeResponse(data: AnalyzeApiResponse): AnalyzeResult {
+  const confidenceMap = { high: "高", medium: "中", low: "低" } as const;
+  return {
+    customerIntent: data.customer_intent,
+    products: safeArray(data.items).map((item) => ({ name: item.name, quantity: item.quantity, unit: item.unit, notes: item.note, confidence: confidenceMap[item.confidence] })),
+    missingInfo: safeArray(data.missing_info),
+    risks: safeArray(data.risk_flags),
+    nextActions: safeArray(data.next_action),
+    reply: data.reply,
+    summary: data.summary,
+    customerName: data.customer_info?.name || "待填写客户",
+    platform: data.customer_info?.platform || "未识别",
+    orderStatus: data.order_status,
+    urgency: data.urgency,
+  };
 }
 
 function Metric({ label, value, tone }: { label: string; value: number; tone: string }) {

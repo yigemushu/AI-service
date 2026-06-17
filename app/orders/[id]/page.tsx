@@ -15,6 +15,17 @@ function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function getOrderTheme(order: Order) {
+  const themes: Record<Order["businessType"], { badge: string; panel: string; chip: string; glow: string }> = {
+    sam: { badge: "bg-sky-50 text-sky-700", panel: "from-sky-50 to-white", chip: "bg-sky-100 text-sky-700", glow: "shadow-sky-200/60" },
+    xianyu: { badge: "bg-amber-50 text-amber-700", panel: "from-amber-50 to-white", chip: "bg-amber-100 text-amber-800", glow: "shadow-amber-200/60" },
+    virtual: { badge: "bg-fuchsia-50 text-fuchsia-700", panel: "from-fuchsia-50 to-white", chip: "bg-fuchsia-100 text-fuchsia-700", glow: "shadow-fuchsia-200/50" },
+    local: { badge: "bg-emerald-50 text-emerald-700", panel: "from-emerald-50 to-white", chip: "bg-emerald-100 text-emerald-700", glow: "shadow-emerald-200/60" },
+    trade: { badge: "bg-indigo-50 text-indigo-700", panel: "from-indigo-50 to-white", chip: "bg-indigo-100 text-indigo-700", glow: "shadow-indigo-200/50" },
+  };
+  return themes[order.businessType];
+}
+
 function safeString(value: unknown) {
   return typeof value === "string" ? value : String(value ?? "");
 }
@@ -139,14 +150,29 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     ].join("\n");
   }
 
+  function isVirtualServiceOrder(currentOrder: Order) {
+    const text = [
+      currentOrder.orderTitle,
+      currentOrder.summary,
+      currentOrder.itemSummary,
+      currentOrder.rawMessage,
+      currentOrder.analysis?.customerIntent,
+      currentOrder.analysis?.summary,
+      ...(currentOrder.analysis?.products || []).map((item) => `${item.name} ${item.notes || ""}`),
+      ...(currentOrder.conversation || []).map((turn) => turn.content),
+    ].filter(Boolean).join("\n");
+    return /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|翻译|设计|修图|提示词|prompt|报告|方案|咨询|字数|页数|交付)/i.test(text);
+  }
+
   async function requestAnalysis(currentOrder: Order, options: { mode: "continue" | "regenerate"; chatText: string; latestMessage?: string }) {
     const settings = getSettings();
     const conversationHistory = getOrderConversation(currentOrder).map(({ role, content, createdAt }) => ({ role, content, createdAt }));
+    const useVirtualTemplates = currentOrder.businessType === "virtual" || (currentOrder.businessType === "xianyu" && isVirtualServiceOrder(currentOrder));
     const enabledTemplates = ensureTemplates()
-      .filter((template) => template.enabled && template.businessType === currentOrder.businessType)
+      .filter((template) => template.enabled && (template.businessType === currentOrder.businessType || (useVirtualTemplates && template.businessType === "virtual")))
       .map(({ name, scenario, requiredInfo, content }) => ({ name: safeString(name), scenario: safeString(scenario), requiredInfo: safeString(requiredInfo), content: safeString(content) }));
     const knowledgeRules = ensureKnowledgeRules()
-      .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType))
+      .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType || (useVirtualTemplates && rule.businessType === "virtual")))
       .map(({ title, category, content }) => ({ title: safeString(title), category: safeString(category), content: safeString(content) }));
     const latestMessage = safeString(options.latestMessage);
     const conciseChatText = options.mode === "continue"
@@ -299,19 +325,23 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const itemSummary = products.length > 0 ? formatItemSummary(products) : order.itemSummary;
   const conversation = getOrderConversation(order);
   const history = order.history || [];
+  const theme = getOrderTheme(order);
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <header className={`overflow-hidden rounded-3xl border border-white/80 bg-gradient-to-br ${theme.panel} p-5 shadow-xl ${theme.glow} ring-1 ring-slate-100 lg:p-7`}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-950">订单详情</h1>
-          <p className="mt-1 text-sm text-slate-500">查看连续对话、推荐回复、订单历史和跟进备注。</p>
+          <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${theme.badge}`}>{businessTypeLabels[order.businessType]} · {order.status}</div>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 lg:text-4xl">{order.orderTitle || order.customerName}</h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">查看连续对话、推荐回复、订单历史和跟进备注。推荐回复复制后才会写入连续对话。</p>
         </div>
         <Link className={secondaryButtonClass} href="/orders">返回客户订单</Link>
+        </div>
       </header>
-      {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{message}</div> : null}
+      {message ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">{message}</div> : null}
 
-      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <div className="grid gap-5 xl:grid-cols-[0.95fr_1.25fr]">
         <Section title="客户画像">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="订单名称"><input className={inputClass} value={order.orderTitle || ""} onChange={(event) => updateOrder({ orderTitle: event.target.value })} /></Field>
@@ -336,15 +366,25 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           </div>
         </Section>
 
-        <Section title="需求摘要">
+        <section className={`rounded-3xl border border-white/80 bg-gradient-to-br ${theme.panel} p-5 shadow-xl ${theme.glow} ring-1 ring-slate-100`}>
+          <div className="mb-5 flex items-start justify-between gap-3">
+            <div>
+              <div className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${theme.chip}`}>AI Order Analysis</div>
+              <h2 className="mt-3 text-xl font-semibold tracking-tight text-slate-950">需求摘要与推荐回复</h2>
+            </div>
+            <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm">{order.intentLevel}意向</span>
+          </div>
           <InfoBlock title="客户诉求" content={order.analysis?.customerIntent || order.summary} />
           <InfoBlock title="商品/服务" content={itemSummary || "待确认"} />
-          <InfoBlock title="推荐回复草稿" content={order.analysis?.reply || "暂无"} strong />
+          <div className="mb-4">
+            <div className="mb-2 text-sm font-semibold text-slate-800">推荐回复草稿</div>
+            <div className="whitespace-pre-line rounded-2xl border border-emerald-100 bg-emerald-50/90 p-4 text-sm leading-7 text-emerald-950 shadow-sm">{order.analysis?.reply || "暂无"}</div>
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
             <button type="button" className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
           </div>
-        </Section>
+        </section>
       </div>
 
       <Section title="继续跟进" description="客户又回复时，把新消息粘到这里。AI 会带着前面的订单信息和历史对话一起分析。">
@@ -359,17 +399,17 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       </Section>
 
       <div className="grid gap-5 lg:grid-cols-3">
-        <Section title="缺失信息"><SimpleList items={order.analysis?.missingInfo || []} empty="暂无明显缺失" /></Section>
-        <Section title="风险点"><SimpleList items={order.analysis?.risks || []} empty="暂无明显风险" /></Section>
-        <Section title="下一步动作"><SimpleList items={order.analysis?.nextActions || []} empty="暂无下一步动作" /></Section>
+        <Section title="缺失信息"><SimpleList items={order.analysis?.missingInfo || []} empty="暂无明显缺失" tone="amber" /></Section>
+        <Section title="风险点"><SimpleList items={order.analysis?.risks || []} empty="暂无明显风险" tone="rose" /></Section>
+        <Section title="下一步动作"><SimpleList items={order.analysis?.nextActions || []} empty="暂无下一步动作" tone="sky" /></Section>
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1fr_0.85fr]">
         <Section title="连续对话">
           <div className="space-y-3">
             {conversation.map((turn) => (
-              <div key={turn.id} className={`rounded-md border p-3 text-sm ${turn.role === "assistant" ? "border-emerald-100 bg-emerald-50 text-emerald-950" : "border-amber-100 bg-white text-slate-700"}`}>
-                <div className="mb-1 text-xs font-semibold text-slate-500">{turn.role === "assistant" ? "最终回复" : turn.role === "seller_note" ? "商家备注" : "客户消息"}</div>
+              <div key={turn.id} className={`rounded-2xl border p-4 text-sm shadow-sm ${turn.role === "assistant" ? "border-emerald-100 bg-emerald-50 text-emerald-950" : turn.role === "seller_note" ? "border-sky-100 bg-sky-50 text-sky-950" : "border-white bg-white/90 text-slate-700 ring-1 ring-slate-100"}`}>
+                <div className="mb-2 inline-flex rounded-full bg-white/80 px-2.5 py-1 text-xs font-semibold text-slate-500 shadow-sm">{turn.role === "assistant" ? "最终回复" : turn.role === "seller_note" ? "商家备注" : "客户消息"}</div>
                 <div className="whitespace-pre-wrap leading-6">{turn.content}</div>
               </div>
             ))}
@@ -379,7 +419,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         <Section title="订单历史">
           <div className="space-y-3">
             {(history.length ? history : [createOrderHistoryEvent("created", "订单创建", order.summary, order.createdAt)]).map((event) => (
-              <div key={event.id} className="rounded-md border border-amber-100 bg-white p-3 text-sm">
+              <div key={event.id} className="rounded-2xl border border-white bg-white/90 p-4 text-sm shadow-sm ring-1 ring-slate-100">
                 <div className="font-semibold text-slate-950">{event.title}</div>
                 <div className="mt-1 text-xs text-slate-400">{formatDateTime(event.createdAt)}</div>
                 <div className="mt-2 whitespace-pre-wrap leading-6 text-slate-700">{event.detail}</div>
@@ -442,11 +482,16 @@ function InfoBlock({ title, content, strong = false }: { title: string; content:
   return (
     <div className="mb-4">
       <div className="mb-1 text-sm font-semibold text-slate-800">{title}</div>
-      <div className={`whitespace-pre-line rounded-md border border-amber-100 p-3 text-sm leading-6 ${strong ? "bg-emerald-50 text-emerald-950" : "bg-white text-slate-700"}`}>{content}</div>
+      <div className={`whitespace-pre-line rounded-2xl border p-4 text-sm leading-6 shadow-sm ${strong ? "border-emerald-100 bg-emerald-50 text-emerald-950" : "border-white bg-white/85 text-slate-700 ring-1 ring-slate-100"}`}>{content}</div>
     </div>
   );
 }
 
-function SimpleList({ items, empty }: { items: string[]; empty: string }) {
-  return <ul className="space-y-2 text-sm text-slate-700">{(items.length ? items : [empty]).map((item) => <li key={item} className="rounded-md border border-amber-100 bg-white p-2">{item}</li>)}</ul>;
+function SimpleList({ items, empty, tone }: { items: string[]; empty: string; tone: "amber" | "rose" | "sky" }) {
+  const toneClass = {
+    amber: "border-amber-100 bg-amber-50/80 text-amber-950",
+    rose: "border-rose-100 bg-rose-50/80 text-rose-950",
+    sky: "border-sky-100 bg-sky-50/80 text-sky-950",
+  }[tone];
+  return <ul className="space-y-2 text-sm">{(items.length ? items : [empty]).map((item) => <li key={item} className={`rounded-2xl border p-3 leading-6 shadow-sm ${toneClass}`}>{item}</li>)}</ul>;
 }
