@@ -16,7 +16,39 @@ function setStatus(text, isError = false) {
 }
 
 function normalizeBaseUrl(value) {
-  return (value || "http://localhost:3000").replace(/\/+$/, "");
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("网站地址不能为空");
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("网站地址格式不正确");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("网站地址格式不正确");
+  return url.origin;
+}
+
+function inboxUrl(baseUrl) {
+  return `${normalizeBaseUrl(baseUrl)}/api/inbox`;
+}
+
+function inboxHealthUrl(baseUrl) {
+  return `${normalizeBaseUrl(baseUrl)}/api/inbox/health`;
+}
+
+function getTrimmedValue(name) {
+  return String(fields[name]?.value || "").trim();
+}
+
+function validateRequiredConfig() {
+  const baseUrl = normalizeBaseUrl(fields.baseUrl.value);
+  const token = getTrimmedValue("token");
+  const platform = getTrimmedValue("platform");
+  const businessType = getTrimmedValue("businessType");
+  if (!token) throw new Error("请先填写 Webhook Token");
+  if (!platform) throw new Error("请选择平台");
+  if (!businessType) throw new Error("请选择业务类型");
+  return { baseUrl, token, platform, businessType };
 }
 
 async function loadSettings() {
@@ -26,22 +58,30 @@ async function loadSettings() {
     myNickname: "",
     platform: "闲鱼",
     businessType: "xianyu",
+    customerName: "",
+    customerFolder: "",
   });
-  fields.baseUrl.value = saved.baseUrl;
+  fields.baseUrl.value = saved.baseUrl || "http://localhost:3000";
   fields.token.value = saved.token;
   fields.myNickname.value = saved.myNickname;
   fields.platform.value = saved.platform;
   fields.businessType.value = saved.businessType;
+  fields.customerName.value = saved.customerName;
+  fields.customerFolder.value = saved.customerFolder;
 }
 
 async function saveSettings() {
+  const baseUrl = normalizeBaseUrl(fields.baseUrl.value);
   await chrome.storage.sync.set({
-    baseUrl: fields.baseUrl.value,
-    token: fields.token.value,
-    myNickname: fields.myNickname.value,
+    baseUrl,
+    token: getTrimmedValue("token"),
+    myNickname: getTrimmedValue("myNickname"),
     platform: fields.platform.value,
     businessType: fields.businessType.value,
+    customerName: getTrimmedValue("customerName"),
+    customerFolder: getTrimmedValue("customerFolder"),
   });
+  fields.baseUrl.value = baseUrl;
 }
 
 async function getActiveTab() {
@@ -175,27 +215,62 @@ document.getElementById("capture").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("send").addEventListener("click", async () => {
+document.getElementById("saveConfig").addEventListener("click", async () => {
   try {
     await saveSettings();
-    const rawMessage = fields.rawMessage.value.trim();
-    if (!rawMessage) {
-      setStatus("请先选中或粘贴客户消息", true);
+    setStatus("配置已保存");
+  } catch (error) {
+    setStatus(error.message || "保存失败，请重试", true);
+  }
+});
+
+document.getElementById("testConnection").addEventListener("click", async () => {
+  try {
+    const { baseUrl, token } = validateRequiredConfig();
+    const response = await fetch(inboxHealthUrl(baseUrl), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      setStatus("网站可访问，Token 正确");
       return;
     }
-    const captured = await captureSelection().catch(() => ({ url: "", customerName: "" }));
-    const baseUrl = normalizeBaseUrl(fields.baseUrl.value);
-    const headers = { "Content-Type": "application/json" };
-    if (fields.token.value.trim()) headers.Authorization = `Bearer ${fields.token.value.trim()}`;
-    const response = await fetch(`${baseUrl}/api/inbox`, {
+    if (response.status === 401) throw new Error("Token 错误");
+    if (response.status === 503) throw new Error("服务端未配置 Token");
+    throw new Error(data.error || `测试失败：${response.status}`);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      setStatus("网络失败，请检查网站地址", true);
+    } else {
+      setStatus(error.message || "测试连接失败", true);
+    }
+  }
+});
+
+document.getElementById("send").addEventListener("click", async () => {
+  try {
+    const { baseUrl, token, platform, businessType } = validateRequiredConfig();
+    let rawMessage = fields.rawMessage.value.trim();
+    let captured = { url: "", customerName: "" };
+    if (!rawMessage) {
+      captured = await captureSelection().catch(() => ({ url: "", customerName: "" }));
+      rawMessage = captured.selectedText?.trim() || "";
+    }
+    if (!rawMessage) throw new Error("请先选择或输入客户消息");
+    if (!captured.url && !captured.customerName) captured = await captureSelection().catch(() => ({ url: "", customerName: "" }));
+    const response = await fetch(inboxUrl(baseUrl), {
       method: "POST",
-      headers,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({
         customerName: fields.customerName.value.trim() || captured.customerName || "",
         customerFolder: fields.customerFolder.value.trim() || fields.customerName.value.trim() || captured.customerName || "",
-        platform: fields.platform.value,
+        platform,
         sourceChannel: "浏览器插件",
-        businessType: fields.businessType.value,
+        businessType,
         text: rawMessage,
         rawMessage,
         sourceUrl: captured.url || "",
