@@ -103,21 +103,24 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <header className="overflow-hidden rounded-3xl border border-white/80 bg-gradient-to-br from-sky-50 to-white p-5 shadow-xl shadow-slate-200/70 ring-1 ring-slate-100 lg:p-7">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-950">客户订单</h1>
-          <p className="mt-1 text-sm text-slate-500">筛选客户、跟进状态、沉淀备注，并导出给团队复盘。</p>
+          <div className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">Order Workbench</div>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950 lg:text-4xl">客户订单</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">筛选客户、跟进状态、沉淀备注，并导出给团队复盘。</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button className={secondaryButtonClass} onClick={loadDemoData}>加载演示数据</button>
           <button className={primaryButtonClass} onClick={exportCsv}>导出 CSV</button>
+        </div>
         </div>
       </header>
 
       <StatsCards stats={stats} activeKey={statFilter} onSelect={selectStatFilter} />
 
       {statFilter ? (
-        <div className="flex flex-col gap-2 rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <span>正在查看：{statFilterLabels[statFilter]}，共 {filteredOrders.length} 条。</span>
           <button className="font-semibold underline-offset-4 hover:underline" onClick={clearStatFilter}>查看全部客户</button>
         </div>
@@ -157,7 +160,7 @@ export default function OrdersPage() {
         ) : (
           <div className="space-y-3">
             {filteredOrders.map((order) => (
-              <article key={order.id} className={`rounded-md border border-slate-200 p-4 ${order.isNew ? "bg-red-50" : "bg-white"}`}>
+              <article key={order.id} className={`rounded-2xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg ${order.isNew ? "border-rose-100 bg-rose-50/80" : "border-white bg-white/90 ring-1 ring-slate-100"}`}>
                 <div className="grid gap-3 lg:grid-cols-[1fr_1fr_160px_130px_210px] lg:items-start">
                   <div>
                     <div className="font-semibold text-slate-950">{order.orderTitle || order.customerName}</div>
@@ -185,7 +188,7 @@ export default function OrdersPage() {
                     >
                       {order.status === "已完成" ? "已完成" : "完成"}
                     </button>
-                    <button className="min-h-10 rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50" onClick={() => deleteOrder(order.id)}>
+                    <button className="min-h-10 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 transition hover:-translate-y-0.5 hover:bg-rose-50 hover:shadow-md" onClick={() => deleteOrder(order.id)}>
                       删除
                     </button>
                   </div>
