@@ -4,6 +4,7 @@ type AiProviderInput = {
   prompt: string;
   schema: unknown;
   responseMode?: "fast" | "full";
+  minOutputTokens?: number;
 };
 
 type ResponsesApiPayload = {
@@ -27,6 +28,15 @@ function safeLower(value: unknown) {
   return safeString(value).toLowerCase();
 }
 
+function readApiKey() {
+  const apiKey = safeString(process.env.OPENAI_API_KEY).trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+  if (!/^[\x20-\x7E]+$/.test(apiKey)) {
+    throw new Error("OPENAI_API_KEY contains non-ASCII characters. Please replace the placeholder with a real provider key in .env.local.");
+  }
+  return apiKey;
+}
+
 function getProvider() {
   const raw = safeLower(process.env.AI_PROVIDER || "openai");
   return raw === "openai-compatible" ? "openai-compatible" : "openai";
@@ -44,13 +54,13 @@ function readChatCompletionText(response: unknown) {
 }
 
 export async function callAiProvider(input: AiProviderInput) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+  const apiKey = readApiKey();
 
   const provider = getProvider();
   const model = process.env.OPENAI_FAST_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || "18000");
-  const maxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
+  const configuredMaxOutputTokens = Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || (input.responseMode === "full" ? "1100" : "800"));
+  const maxOutputTokens = Math.max(configuredMaxOutputTokens, input.minOutputTokens || 0);
   const baseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
 
   if (provider === "openai-compatible") {

@@ -26,10 +26,20 @@ function getOrderTheme(order: Order) {
   return themes[order.businessType];
 }
 
+function safeString(value: unknown) {
+  return typeof value === "string" ? value : String(value ?? "");
+}
+
+function normalizeConversationRole(role: unknown): ConversationTurn["role"] {
+  return role === "assistant" || role === "seller_note" ? role : "customer";
+}
+
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [orders, setOrders] = useState<Order[]>([]);
   const [message, setMessage] = useState("");
+  const [followUpText, setFollowUpText] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const order = useMemo(() => orders.find((item) => item.id === id), [orders, id]);
 
@@ -69,16 +79,52 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     return defaultKnowledgeRules;
   }
 
-  function buildConversationHistory(currentOrder: Order) {
+  function getOrderConversation(currentOrder: Order): ConversationTurn[] {
     const turns = currentOrder.conversation?.length
       ? currentOrder.conversation
       : [{ id: `${currentOrder.id}_initial`, role: "customer" as const, content: currentOrder.rawMessage, createdAt: currentOrder.createdAt }];
+    return turns
+      .map((turn) => ({
+        id: safeString(turn.id) || `turn_${currentOrder.id}_${Date.now()}`,
+        role: normalizeConversationRole(turn.role),
+        content: safeString(turn.content),
+        createdAt: safeString(turn.createdAt) || currentOrder.createdAt,
+      }))
+      .filter((turn) => turn.content.trim());
+  }
+
+  function buildConversationHistory(currentOrder: Order) {
+    const turns = getOrderConversation(currentOrder);
     return turns
       .map((turn, index) => {
         const roleLabel = turn.role === "assistant" ? "最终回复" : turn.role === "seller_note" ? "商家备注" : "客户消息";
         return `${index + 1}. ${roleLabel}：${turn.content}`;
       })
       .join("\n");
+  }
+
+  function buildContextText(currentOrder: Order, nextCustomerMessage: string) {
+    return [
+      "下面是同一个客户的连续对话。请结合历史上下文分析最新一条客户消息，不要把它当成全新的客户。",
+      "连续对话里的 assistant 内容代表商家最终采用并复制出去的回复；重新生成但未复制的候选回复不算历史消息。",
+      "最新客户消息可能是在补充上一轮缺失信息。请先判断哪些缺失信息已经被补齐，并从 missing_info 中移除，不要重复询问客户已经补充过的内容。",
+      "如果客户补齐了用途、语气、截止时间、事件经过等信息，推荐回复只需要追问仍然缺少的字段，或者进入报价/确认下一步。",
+      "",
+      "历史对话：",
+      buildConversationHistory(currentOrder),
+      "",
+      "当前订单已有信息：",
+      `订单名称：${currentOrder.orderTitle || ""}`,
+      `客户：${currentOrder.customerName}`,
+      `平台：${currentOrder.platform}`,
+      `业务类型：${businessTypeLabels[currentOrder.businessType]}`,
+      `已识别商品/服务：${currentOrder.itemSummary}`,
+      `当前状态：${currentOrder.status}`,
+      `上一轮缺失信息：${safeArray(currentOrder.analysis?.missingInfo).join("、") || "暂无"}`,
+      "",
+      "最新客户消息：",
+      nextCustomerMessage,
+    ].join("\n");
   }
 
   function buildRegenerateText(currentOrder: Order) {
@@ -118,40 +164,88 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     return /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|翻译|设计|修图|提示词|prompt|报告|方案|咨询|字数|页数|交付)/i.test(text);
   }
 
-  async function requestAnalysis(chatText: string, currentOrder: Order) {
+  async function requestAnalysis(currentOrder: Order, options: { mode: "continue" | "regenerate"; chatText: string; latestMessage?: string }) {
     const settings = getSettings();
+    const conversationHistory = getOrderConversation(currentOrder).map(({ role, content, createdAt }) => ({ role, content, createdAt }));
     const useVirtualTemplates = currentOrder.businessType === "virtual" || (currentOrder.businessType === "xianyu" && isVirtualServiceOrder(currentOrder));
     const enabledTemplates = ensureTemplates()
       .filter((template) => template.enabled && (template.businessType === currentOrder.businessType || (useVirtualTemplates && template.businessType === "virtual")))
-      .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
+      .map(({ name, scenario, requiredInfo, content }) => ({ name: safeString(name), scenario: safeString(scenario), requiredInfo: safeString(requiredInfo), content: safeString(content) }));
     const knowledgeRules = ensureKnowledgeRules()
       .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType || (useVirtualTemplates && rule.businessType === "virtual")))
-      .map(({ title, category, content }) => ({ title, category, content }));
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chatText,
-        businessType: currentOrder.businessType,
-        systemPrompt: settings.systemPrompt,
-        sellerRules: settings.merchantRules,
-        enabledTemplates,
-        knowledgeRules,
-        responseMode: "fast",
-      }),
-    });
-    const data = (await response.json()) as AnalyzeApiResponse;
-    if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
-    return mapAnalyzeResponse(data);
+      .map(({ title, category, content }) => ({ title: safeString(title), category: safeString(category), content: safeString(content) }));
+    const latestMessage = safeString(options.latestMessage);
+    const conciseChatText = options.mode === "continue"
+      ? [
+          currentOrder.summary,
+          currentOrder.itemSummary,
+          latestMessage ? `最新客户消息：${latestMessage}` : "",
+        ].filter(Boolean).join("\n")
+      : [
+          currentOrder.summary,
+          currentOrder.itemSummary,
+          "请基于结构化上下文重新生成一版推荐回复草稿。",
+        ].filter(Boolean).join("\n");
+    const logBase = {
+      orderId: currentOrder.id,
+      mode: options.mode,
+      businessType: currentOrder.businessType,
+      historyLength: conversationHistory.length,
+      latestMessageLength: latestMessage.length,
+      hasKnowledge: knowledgeRules.length > 0,
+      hasTemplates: enabledTemplates.length > 0,
+    };
+    console.info("[order-detail/analyze] request started", logBase);
+    let response: Response | undefined;
+    try {
+      response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatText: conciseChatText || options.chatText,
+          mode: options.mode,
+          businessType: currentOrder.businessType,
+          platform: currentOrder.platform,
+          currentMessage: latestMessage,
+          latestMessage,
+          conversationHistory,
+          orderSummary: currentOrder.summary || currentOrder.analysis?.summary || currentOrder.rawMessage,
+          items: currentOrder.itemSummary || formatItemSummary(currentOrder.analysis?.products || []),
+          customerInfo: [currentOrder.customerName, currentOrder.platform, currentOrder.status].filter(Boolean).join(" / "),
+          systemPrompt: settings.systemPrompt,
+          sellerRules: settings.merchantRules,
+          enabledTemplates,
+          knowledgeRules,
+          responseMode: "fast",
+        }),
+      });
+      const data = (await response.json()) as AnalyzeApiResponse;
+      if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
+      console.info("[order-detail/analyze] request succeeded", { ...logBase, httpStatus: response.status });
+      return mapAnalyzeResponse(data);
+    } catch (error) {
+      console.error("[order-detail/analyze] request failed", {
+        ...logBase,
+        httpStatus: response?.status,
+        errorMessage: error instanceof Error ? error.message.slice(0, 180) : safeString(error).slice(0, 180),
+      });
+      throw error;
+    }
   }
 
-  async function regenerateReply() {
+  async function analyzeFollowUp() {
     if (!order) return;
-    setRegenerating(true);
+    const text = followUpText.trim();
+    if (!text) return setMessage("请先粘贴客户新回复");
+    setAnalyzing(true);
     setMessage("");
     try {
-      const analysis = await requestAnalysis(buildRegenerateText(order), order);
+      const analysis = await requestAnalysis(order, { mode: "continue", chatText: buildContextText(order, text), latestMessage: text });
       const now = new Date().toISOString();
+      const nextConversation: ConversationTurn[] = [
+        ...(order.conversation || []),
+        { id: `turn_${Date.now()}_customer`, role: "customer", content: text, createdAt: now },
+      ];
       updateOrder(
         {
           analysis,
@@ -159,12 +253,38 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           itemSummary: formatItemSummary(analysis.products) || order.itemSummary,
           status: mapOrderStatus(analysis.orderStatus, analysis.missingInfo),
           intentLevel: inferIntentLevel(analysis.urgency, analysis.missingInfo),
+          rawMessage: `${order.rawMessage}\n\n[客户追问 ${new Date().toLocaleString()}]\n${text}`,
+          conversation: nextConversation,
         },
-        createOrderHistoryEvent("reply_generated", "重新生成候选回复", analysis.reply, now),
+        createOrderHistoryEvent("follow_up", "继续跟进", `客户新回复：${text}`, now),
       );
+      setFollowUpText("");
+      setMessage("已结合历史消息重新分析。推荐回复复制后才会写入连续对话。");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "请稍后重试";
+      setMessage(`继续分析失败：${detail}`);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  async function regenerateReply() {
+    if (!order) return;
+    setRegenerating(true);
+    setMessage("");
+    try {
+      const analysis = await requestAnalysis(order, { mode: "regenerate", chatText: buildRegenerateText(order) });
+      updateOrder({
+        analysis,
+        summary: analysis.summary || order.summary,
+        itemSummary: formatItemSummary(analysis.products) || order.itemSummary,
+        status: mapOrderStatus(analysis.orderStatus, analysis.missingInfo),
+        intentLevel: inferIntentLevel(analysis.urgency, analysis.missingInfo),
+      });
       setMessage("已重新生成候选回复。复制采用后才会写入连续对话。");
-    } catch {
-      setMessage("重新生成失败，请稍后重试");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "请稍后重试";
+      setMessage(`重新生成失败：${detail}`);
     } finally {
       setRegenerating(false);
     }
@@ -203,9 +323,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   const products = order.analysis?.products || [];
   const itemSummary = products.length > 0 ? formatItemSummary(products) : order.itemSummary;
-  const conversation = order.conversation?.length
-    ? order.conversation
-    : [{ id: `${order.id}_initial`, role: "customer" as const, content: order.rawMessage, createdAt: order.createdAt }];
+  const conversation = getOrderConversation(order);
   const history = order.history || [];
   const theme = getOrderTheme(order);
 
@@ -263,11 +381,22 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <div className="whitespace-pre-line rounded-2xl border border-emerald-100 bg-emerald-50/90 p-4 text-sm leading-7 text-emerald-950 shadow-sm">{order.analysis?.reply || "暂无"}</div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <button className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
-            <button className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
+            <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
+            <button type="button" className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
           </div>
         </section>
       </div>
+
+      <Section title="继续跟进" description="客户又回复时，把新消息粘到这里。AI 会带着前面的订单信息和历史对话一起分析。">
+        <div className="grid gap-4 lg:grid-cols-[1fr_220px] lg:items-end">
+          <Field label="客户新回复">
+            <textarea className={`${textareaClass} min-h-28`} value={followUpText} onChange={(event) => setFollowUpText(event.target.value)} placeholder="例如：那明天中午前能做好吗？可以便宜一点吗？" />
+          </Field>
+          <button type="button" className={primaryButtonClass} onClick={analyzeFollowUp} disabled={analyzing || !followUpText.trim()}>
+            {analyzing ? "分析中..." : "结合历史再分析"}
+          </button>
+        </div>
+      </Section>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Section title="缺失信息"><SimpleList items={order.analysis?.missingInfo || []} empty="暂无明显缺失" tone="amber" /></Section>
