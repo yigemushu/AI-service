@@ -18,17 +18,32 @@ const keys = {
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
-  const raw = window.localStorage.getItem(key);
-  if (!raw) return fallback;
   try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
     return JSON.parse(raw) as T;
   } catch {
-    return fallback;
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return fallback;
+      return JSON.parse(raw) as T;
+    } catch {
+      return fallback;
+    }
   }
 }
 
 function writeJson<T>(key: string, value: T) {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  const raw = JSON.stringify(value);
+  try {
+    window.localStorage.setItem(key, raw);
+  } catch {
+    try {
+      window.sessionStorage.setItem(key, raw);
+    } catch {
+      // Storage can be blocked in some browser modes; callers should still be able to update in-memory UI state.
+    }
+  }
 }
 
 export function getOrders() {
@@ -108,6 +123,25 @@ export function getSettings() {
 
 export function saveSettings(settings: Settings) {
   writeJson(keys.settings, settings);
+}
+
+export async function getWebhookTokenForClient() {
+  const localToken = getSettings().inboxWebhookToken?.trim();
+  if (localToken) return localToken;
+
+  try {
+    const response = await fetch("/api/settings", { cache: "no-store" });
+    const data = (await response.json()) as { inboxWebhookToken?: string };
+    const serverToken = typeof data.inboxWebhookToken === "string" ? data.inboxWebhookToken.trim() : "";
+    if (response.ok && serverToken) {
+      saveSettings({ ...getSettings(), inboxWebhookToken: serverToken });
+      return serverToken;
+    }
+  } catch {
+    // The app can still work with local-only settings if the server settings endpoint is unavailable.
+  }
+
+  return "";
 }
 
 export function isDemoAuthed() {

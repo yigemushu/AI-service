@@ -5,10 +5,11 @@ import { use, useEffect, useMemo, useState } from "react";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
-import { businessTypeLabels, defaultKnowledgeRules, defaultTemplates, mergeDefaultTemplates, orderStatuses } from "@/lib/constants";
+import { businessTypeLabels, defaultKnowledgeRules, mergeDefaultTemplates, orderStatuses } from "@/lib/constants";
+import { buildAnalyzePayload, promptVersion } from "@/lib/analyzePayload";
 import { formatItemSummary } from "@/lib/format";
 import { createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
-import { getKnowledgeRules, getOrders, getSettings, getTemplates, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
+import { getKnowledgeRules, getOrders, getSettings, getTemplates, getWebhookTokenForClient, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, AnalyzeResult, ConversationTurn, IntentLevel, Order, OrderHistoryEvent, OrderStatus } from "@/lib/types";
 
 function safeArray<T>(value: T[] | undefined | null): T[] {
@@ -34,6 +35,16 @@ function normalizeConversationRole(role: unknown): ConversationTurn["role"] {
   return role === "assistant" || role === "seller_note" ? role : "customer";
 }
 
+function mergeOrders(localOrders: Order[], serverOrders: Order[]) {
+  const byId = new Map<string, Order>();
+  for (const order of serverOrders.map(normalizeOrder)) byId.set(order.id, order);
+  for (const order of localOrders.map(normalizeOrder)) {
+    const existing = byId.get(order.id);
+    byId.set(order.id, existing ? normalizeOrder({ ...existing, ...order, isNew: existing.isNew || order.isNew }) : order);
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -48,7 +59,28 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     const next = normalized.map((item) => (item.id === id ? { ...item, isNew: false } : item));
     setOrders(next);
     saveOrders(next);
+    if (!next.some((item) => item.id === id)) {
+      syncServerOrder();
+    }
   }, [id]);
+
+  async function syncServerOrder() {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/orders", {
+        cache: "no-store",
+        headers: token ? { "x-webhook-token": token } : undefined,
+      });
+      const data = (await response.json()) as { orders?: Order[] };
+      if (!response.ok || !Array.isArray(data.orders)) return;
+      const serverOrders = data.orders.map(normalizeOrder);
+      const merged = mergeOrders(getOrders().map(normalizeOrder), serverOrders).map((item) => (item.id === id ? { ...item, isNew: false } : item));
+      setOrders(merged);
+      saveOrders(merged);
+    } catch {
+      // Keep local detail behavior if server orders are unavailable.
+    }
+  }
 
   function updateOrder(patch: Partial<Order>, historyEvent?: OrderHistoryEvent) {
     const next = orders.map((item) => {
@@ -93,107 +125,37 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       .filter((turn) => turn.content.trim());
   }
 
-  function buildConversationHistory(currentOrder: Order) {
-    const turns = getOrderConversation(currentOrder);
-    return turns
-      .map((turn, index) => {
-        const roleLabel = turn.role === "assistant" ? "最终回复" : turn.role === "seller_note" ? "商家备注" : "客户消息";
-        return `${index + 1}. ${roleLabel}：${turn.content}`;
-      })
-      .join("\n");
-  }
-
-  function buildContextText(currentOrder: Order, nextCustomerMessage: string) {
-    return [
-      "下面是同一个客户的连续对话。请结合历史上下文分析最新一条客户消息，不要把它当成全新的客户。",
-      "连续对话里的 assistant 内容代表商家最终采用并复制出去的回复；重新生成但未复制的候选回复不算历史消息。",
-      "最新客户消息可能是在补充上一轮缺失信息。请先判断哪些缺失信息已经被补齐，并从 missing_info 中移除，不要重复询问客户已经补充过的内容。",
-      "如果客户补齐了用途、语气、截止时间、事件经过等信息，推荐回复只需要追问仍然缺少的字段，或者进入报价/确认下一步。",
-      "",
-      "历史对话：",
-      buildConversationHistory(currentOrder),
-      "",
-      "当前订单已有信息：",
-      `订单名称：${currentOrder.orderTitle || ""}`,
-      `客户：${currentOrder.customerName}`,
-      `平台：${currentOrder.platform}`,
-      `业务类型：${businessTypeLabels[currentOrder.businessType]}`,
-      `已识别商品/服务：${currentOrder.itemSummary}`,
-      `当前状态：${currentOrder.status}`,
-      `上一轮缺失信息：${safeArray(currentOrder.analysis?.missingInfo).join("、") || "暂无"}`,
-      "",
-      "最新客户消息：",
-      nextCustomerMessage,
-    ].join("\n");
-  }
-
-  function buildRegenerateText(currentOrder: Order) {
-    return [
-      "请基于同一个客户的完整历史对话，重新生成一版更自然、更适合直接发送的推荐回复。",
-      "不要新增客户没有说过的承诺，不要自动发送。",
-      "注意：这次只是生成候选回复，除非用户复制采用，否则不要把候选回复当作历史消息。",
-      "",
-      "历史对话：",
-      buildConversationHistory(currentOrder),
-      "",
-      "当前订单信息：",
-      `订单名称：${currentOrder.orderTitle || ""}`,
-      `客户：${currentOrder.customerName}`,
-      `平台：${currentOrder.platform}`,
-      `业务类型：${businessTypeLabels[currentOrder.businessType]}`,
-      `商品/服务：${currentOrder.itemSummary}`,
-      `当前状态：${currentOrder.status}`,
-      `当前缺失信息：${safeArray(currentOrder.analysis?.missingInfo).join("、") || "暂无"}`,
-      `当前风险点：${safeArray(currentOrder.analysis?.risks).join("、") || "暂无"}`,
-      "",
-      "请重点优化 reply 字段，让它短一点、像真人商家、有温度、能直接复制给客户。",
-    ].join("\n");
-  }
-
-  function isVirtualServiceOrder(currentOrder: Order) {
-    const text = [
-      currentOrder.orderTitle,
-      currentOrder.summary,
-      currentOrder.itemSummary,
-      currentOrder.rawMessage,
-      currentOrder.analysis?.customerIntent,
-      currentOrder.analysis?.summary,
-      ...(currentOrder.analysis?.products || []).map((item) => `${item.name} ${item.notes || ""}`),
-      ...(currentOrder.conversation || []).map((turn) => turn.content),
-    ].filter(Boolean).join("\n");
-    return /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|翻译|设计|修图|提示词|prompt|报告|方案|咨询|字数|页数|交付)/i.test(text);
-  }
-
-  async function requestAnalysis(currentOrder: Order, options: { mode: "continue" | "regenerate"; chatText: string; latestMessage?: string }) {
+  async function requestAnalysis(currentOrder: Order, options: { mode: "order-followup" | "regenerate"; latestMessage?: string }) {
     const settings = getSettings();
-    const conversationHistory = getOrderConversation(currentOrder).map(({ role, content, createdAt }) => ({ role, content, createdAt }));
-    const useVirtualTemplates = currentOrder.businessType === "virtual" || (currentOrder.businessType === "xianyu" && isVirtualServiceOrder(currentOrder));
-    const enabledTemplates = ensureTemplates()
-      .filter((template) => template.enabled && (template.businessType === currentOrder.businessType || (useVirtualTemplates && template.businessType === "virtual")))
-      .map(({ name, scenario, requiredInfo, content }) => ({ name: safeString(name), scenario: safeString(scenario), requiredInfo: safeString(requiredInfo), content: safeString(content) }));
-    const knowledgeRules = ensureKnowledgeRules()
-      .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === currentOrder.businessType || (useVirtualTemplates && rule.businessType === "virtual")))
-      .map(({ title, category, content }) => ({ title: safeString(title), category: safeString(category), content: safeString(content) }));
+    const conversationHistory = getOrderConversation(currentOrder);
     const latestMessage = safeString(options.latestMessage);
-    const conciseChatText = options.mode === "continue"
-      ? [
-          currentOrder.summary,
-          currentOrder.itemSummary,
-          latestMessage ? `最新客户消息：${latestMessage}` : "",
-        ].filter(Boolean).join("\n")
-      : [
-          currentOrder.summary,
-          currentOrder.itemSummary,
-          "请基于结构化上下文重新生成一版推荐回复草稿。",
-        ].filter(Boolean).join("\n");
+    const templates = ensureTemplates();
+    const knowledge = ensureKnowledgeRules();
+    const payload = buildAnalyzePayload({
+      chatText: currentOrder.rawMessage,
+      businessType: currentOrder.businessType,
+      settings,
+      templates,
+      knowledgeRules: knowledge,
+      mode: options.mode,
+      order: currentOrder,
+      latestCustomerMessage: latestMessage,
+      conversationHistory,
+      platform: String(currentOrder.platform || ""),
+    });
     const logBase = {
       orderId: currentOrder.id,
       mode: options.mode,
       businessType: currentOrder.businessType,
+      platform: currentOrder.platform,
       historyLength: conversationHistory.length,
+      originalMessageLength: safeString(currentOrder.rawMessage).length,
       latestMessageLength: latestMessage.length,
-      hasKnowledge: knowledgeRules.length > 0,
-      hasTemplates: enabledTemplates.length > 0,
+      itemsCount: currentOrder.analysis?.products?.length || 0,
+      templatesCount: payload.enabledTemplates.length,
+      hasKnowledge: payload.knowledgeRules.length > 0,
+      hasSellerRules: Boolean(settings.merchantRules?.trim()),
+      usedPromptVersion: promptVersion,
     };
     console.info("[order-detail/analyze] request started", logBase);
     let response: Response | undefined;
@@ -201,23 +163,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chatText: conciseChatText || options.chatText,
-          mode: options.mode,
-          businessType: currentOrder.businessType,
-          platform: currentOrder.platform,
-          currentMessage: latestMessage,
-          latestMessage,
-          conversationHistory,
-          orderSummary: currentOrder.summary || currentOrder.analysis?.summary || currentOrder.rawMessage,
-          items: currentOrder.itemSummary || formatItemSummary(currentOrder.analysis?.products || []),
-          customerInfo: [currentOrder.customerName, currentOrder.platform, currentOrder.status].filter(Boolean).join(" / "),
-          systemPrompt: settings.systemPrompt,
-          sellerRules: settings.merchantRules,
-          enabledTemplates,
-          knowledgeRules,
-          responseMode: "fast",
-        }),
+        body: JSON.stringify(payload),
       });
       const data = (await response.json()) as AnalyzeApiResponse;
       if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
@@ -240,7 +186,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     setAnalyzing(true);
     setMessage("");
     try {
-      const analysis = await requestAnalysis(order, { mode: "continue", chatText: buildContextText(order, text), latestMessage: text });
+      const analysis = await requestAnalysis(order, { mode: "order-followup", latestMessage: text });
       const now = new Date().toISOString();
       const nextConversation: ConversationTurn[] = [
         ...(order.conversation || []),
@@ -273,7 +219,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     setRegenerating(true);
     setMessage("");
     try {
-      const analysis = await requestAnalysis(order, { mode: "regenerate", chatText: buildRegenerateText(order) });
+      const analysis = await requestAnalysis(order, { mode: "regenerate" });
       updateOrder({
         analysis,
         summary: analysis.summary || order.summary,

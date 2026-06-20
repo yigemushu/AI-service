@@ -8,6 +8,7 @@ import { StatsCards } from "@/components/StatsCards";
 import { primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
 import { businessGuides, businessTypeLabels, defaultKnowledgeRules, defaultTemplates, mergeDefaultTemplates } from "@/lib/constants";
 import { formatItemSummary, formatQuantity } from "@/lib/format";
+import { buildAnalyzePayload } from "@/lib/analyzePayload";
 import { buildOrderTitle, calculateStats, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus } from "@/lib/orderUtils";
 import { createId, getKnowledgeRules, getOrders, getSettings, getTemplates, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, Order } from "@/lib/types";
@@ -72,21 +73,11 @@ export default function WorkbenchPage() {
     setQuickReply(buildQuickReply(chatText, businessType));
     try {
       const settings = getSettings();
-      const enabledTemplates = ensureTemplates()
-        .filter((template) => Boolean(template) && template.enabled && template.businessType === businessType)
-        .map((template) => ({
-          name: safeString(template.name),
-          scenario: safeString(template.scenario),
-          requiredInfo: safeString(template.requiredInfo),
-          content: safeString(template.content),
-        }));
-      const knowledgeRules = ensureKnowledgeRules()
-        .filter((rule) => Boolean(rule) && rule.enabled && (rule.businessType === "all" || rule.businessType === businessType))
-        .map((rule) => ({ title: safeString(rule.title), category: safeString(rule.category), content: safeString(rule.content) }));
+      const payload = buildAnalyzePayload({ chatText, businessType, settings, templates: ensureTemplates(), knowledgeRules: ensureKnowledgeRules() });
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatText: safeString(chatText), businessType, systemPrompt: safeString(settings?.systemPrompt), sellerRules: safeString(settings?.merchantRules), enabledTemplates, knowledgeRules, responseMode: "fast" }),
+        body: JSON.stringify(payload),
       });
       const responseText = await response.text();
       let data: AnalyzeApiResponse;

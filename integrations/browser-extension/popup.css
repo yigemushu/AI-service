@@ -3,28 +3,45 @@
 }
 
 body {
-  width: 360px;
+  width: 390px;
   margin: 0;
-  background: #f7f1e8;
+  background: #f6f7f9;
   color: #111827;
   font-family: Arial, "Microsoft YaHei", sans-serif;
 }
 
 main {
-  padding: 14px;
+  padding: 12px;
+}
+
+header,
+.panel {
+  margin-bottom: 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+details.panel summary {
+  cursor: pointer;
+  color: #005f73;
+  font-size: 12px;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+details.panel[open] summary {
+  margin-bottom: 8px;
 }
 
 header {
-  margin-bottom: 12px;
   padding: 12px;
-  border: 1px solid #fde7bd;
-  border-radius: 8px;
-  background: #ffffff;
 }
 
-header span {
-  display: block;
-  color: #047857;
+header span,
+.section-title {
+  color: #005f73;
   font-size: 12px;
   font-weight: 700;
 }
@@ -32,7 +49,15 @@ header span {
 header strong {
   display: block;
   margin-top: 4px;
-  font-size: 18px;
+  font-size: 17px;
+}
+
+.panel {
+  padding: 12px;
+}
+
+.section-title {
+  margin-bottom: 8px;
 }
 
 label {
@@ -45,10 +70,11 @@ label {
 
 input,
 select,
-textarea {
+textarea,
+.box {
   width: 100%;
   margin-top: 5px;
-  border: 1px solid #fde7bd;
+  border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #ffffff;
   color: #111827;
@@ -59,11 +85,24 @@ textarea {
 }
 
 textarea {
-  min-height: 104px;
+  min-height: 92px;
   resize: vertical;
 }
 
-.grid {
+textarea.compact {
+  min-height: 58px;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-size: 12px;
+}
+
+#reply {
+  min-height: 116px;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.grid,
+.button-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
@@ -73,7 +112,7 @@ button {
   width: 100%;
   min-height: 36px;
   margin-top: 8px;
-  border: 1px solid #fde7bd;
+  border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #ffffff;
   color: #111827;
@@ -83,15 +122,49 @@ button {
 }
 
 button.primary {
-  border-color: #111827;
-  background: #111827;
+  border-color: #002b3a;
+  background: #002b3a;
   color: #ffffff;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.box {
+  min-height: 34px;
+  margin-bottom: 0;
+  line-height: 1.5;
+}
+
+.muted {
+  color: #334155;
+}
+
+.list {
+  padding-left: 24px;
+}
+
+.list li {
+  margin: 2px 0;
+}
+
+.hidden {
+  display: none;
 }
 
 #status {
   min-height: 18px;
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   color: #047857;
   font-size: 12px;
   line-height: 18px;
+}
+
+.hint {
+  margin: 8px 0 0;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.5;
 }

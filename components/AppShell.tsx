@@ -5,13 +5,19 @@ import { AppNav } from "@/components/AppNav";
 import { primaryButtonClass, secondaryButtonClass } from "@/components/ui";
 import { isDemoAuthed, setDemoAuthed } from "@/lib/storage";
 
+const isDemoEnvironment = process.env.NEXT_PUBLIC_APP_ENV === "demo";
+
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState(isDemoEnvironment);
   const [account, setAccount] = useState("admin");
   const [password, setPassword] = useState("demo123");
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (isDemoEnvironment) {
+      setAuthed(true);
+      return;
+    }
     setAuthed(isDemoAuthed());
     const refresh = () => setAuthed(isDemoAuthed());
     window.addEventListener("auth-updated", refresh);
@@ -20,9 +26,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   function login() {
     if (account === "admin" && password === "demo123") {
-      setDemoAuthed(true);
       setAuthed(true);
       setError("");
+      setDemoAuthed(true);
       return;
     }
     setError("账号或密码不正确，可使用 admin / demo123 进入演示模式");
@@ -47,14 +53,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <input className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
             </label>
             {error ? <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-            <button className={`${primaryButtonClass} w-full`} onClick={login}>进入演示工作台</button>
+            <button type="button" className={`${primaryButtonClass} w-full`} onClick={login}>进入演示工作台</button>
             <button
+              type="button"
               className={`${secondaryButtonClass} w-full`}
               onClick={() => {
                 setAccount("admin");
                 setPassword("demo123");
-                setDemoAuthed(true);
                 setAuthed(true);
+                setDemoAuthed(true);
               }}
             >
               一键进入 Demo 模式
@@ -83,7 +90,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <AppNav />
           <div className="mt-auto px-3 pb-4">
-            <button className={`${secondaryButtonClass} w-full`} onClick={() => setDemoAuthed(false)}>退出登录</button>
+            <button type="button" className={`${secondaryButtonClass} w-full`} onClick={() => {
+              setDemoAuthed(false);
+              setAuthed(false);
+            }}>退出登录</button>
           </div>
         </div>
       </aside>

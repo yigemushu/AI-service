@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:stable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local-dev.ps1",
+    "dev:stable:reset": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local-dev.ps1 -StopExisting",
+    "dev:check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local-dev.ps1",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit"

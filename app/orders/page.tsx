@@ -9,7 +9,7 @@ import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } f
 import { businessTypeLabels, orderStatuses } from "@/lib/constants";
 import { demoOrders } from "@/lib/demoData";
 import { createOrderHistoryEvent, calculateStats, matchesOrderFilters, normalizeOrder } from "@/lib/orderUtils";
-import { createId, getCustomerMessages, getOrders, saveCustomerMessages, saveOrders } from "@/lib/storage";
+import { createId, getCustomerMessages, getOrders, getWebhookTokenForClient, saveCustomerMessages, saveOrders } from "@/lib/storage";
 import type { AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, IntentLevel, Order, OrderStatus } from "@/lib/types";
 
 export default function OrdersPage() {
@@ -24,7 +24,25 @@ export default function OrdersPage() {
     const synced = syncMessageFoldersToOrders();
     setOrders(synced);
     saveOrders(synced);
+    syncServerOrders(synced);
   }, []);
+
+  async function syncServerOrders(baseOrders = orders) {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/orders", {
+        cache: "no-store",
+        headers: token ? { "x-webhook-token": token } : undefined,
+      });
+      const data = (await response.json()) as { orders?: Order[] };
+      if (!response.ok || !Array.isArray(data.orders)) return;
+      const merged = mergeOrders(baseOrders, data.orders);
+      setOrders(merged);
+      saveOrders(merged);
+    } catch {
+      // Server orders are optional in local demo mode; localStorage orders remain available.
+    }
+  }
 
   const filteredOrders = useMemo(
     () => orders.filter((order) => matchesOrderFilters(order, { status, businessType, intentLevel, keyword }) && matchesStatFilter(order, statFilter)),
@@ -319,6 +337,16 @@ function syncMessageFoldersToOrders() {
 
   if (changedOrders) saveCustomerMessages(nextMessages);
   return nextOrders.map(normalizeOrder);
+}
+
+function mergeOrders(localOrders: Order[], serverOrders: Order[]) {
+  const byId = new Map<string, Order>();
+  for (const order of serverOrders.map(normalizeOrder)) byId.set(order.id, order);
+  for (const order of localOrders.map(normalizeOrder)) {
+    const existing = byId.get(order.id);
+    byId.set(order.id, existing ? normalizeOrder({ ...existing, ...order, isNew: existing.isNew || order.isNew }) : order);
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 const statFilterLabels: Record<StatsCardKey, string> = {

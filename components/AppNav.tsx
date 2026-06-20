@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getCustomerMessages, getOrders } from "@/lib/storage";
+import { getCustomerMessages, getOrders, getWebhookTokenForClient } from "@/lib/storage";
+import type { CustomerMessage, Order } from "@/lib/types";
 
 const navItems: Array<{ href: string; label: string; badge?: "newOrders" | "newMessages" }> = [
   { href: "/", label: "工作台" },
@@ -25,17 +26,43 @@ function getNewMessageCount() {
   return getCustomerMessages().filter((message) => message.isNew).length;
 }
 
+async function fetchServerCounts() {
+  const token = await getWebhookTokenForClient();
+  const headers = token ? { "x-webhook-token": token } : undefined;
+  const [inboxResponse, ordersResponse] = await Promise.allSettled([
+    fetch("/api/inbox", { cache: "no-store", headers }),
+    fetch("/api/orders", { cache: "no-store", headers }),
+  ]);
+  let messages = 0;
+  let orders = 0;
+  if (inboxResponse.status === "fulfilled" && inboxResponse.value.ok) {
+    const data = (await inboxResponse.value.json().catch(() => ({}))) as { messages?: CustomerMessage[] };
+    messages = Array.isArray(data.messages) ? data.messages.filter((message) => message.isNew).length : 0;
+  }
+  if (ordersResponse.status === "fulfilled" && ordersResponse.value.ok) {
+    const data = (await ordersResponse.value.json().catch(() => ({}))) as { orders?: Order[] };
+    orders = Array.isArray(data.orders) ? data.orders.filter((order) => order.isNew).length : 0;
+  }
+  return { orders, messages };
+}
+
 export function AppNav() {
   const [newOrderCount, setNewOrderCount] = useState(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const pathname = usePathname();
 
   useEffect(() => {
-    const refresh = () => {
-      setNewOrderCount(getNewOrderCount());
-      setNewMessageCount(getNewMessageCount());
+    const refresh = async () => {
+      const localOrders = getNewOrderCount();
+      const localMessages = getNewMessageCount();
+      setNewOrderCount(localOrders);
+      setNewMessageCount(localMessages);
+      const server = await fetchServerCounts().catch(() => ({ orders: 0, messages: 0 }));
+      setNewOrderCount(Math.max(localOrders, server.orders));
+      setNewMessageCount(Math.max(localMessages, server.messages));
     };
     refresh();
+    const timer = window.setInterval(refresh, 20000);
     window.addEventListener("storage", refresh);
     window.addEventListener("orders-updated", refresh);
     window.addEventListener("customer-messages-updated", refresh);
@@ -45,6 +72,7 @@ export function AppNav() {
       window.removeEventListener("orders-updated", refresh);
       window.removeEventListener("customer-messages-updated", refresh);
       window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
     };
   }, []);
 

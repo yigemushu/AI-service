@@ -6,9 +6,10 @@ import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
 import { businessTypeLabels, defaultKnowledgeRules, mergeDefaultTemplates } from "@/lib/constants";
+import { buildAnalyzePayload, isPhysicalGoodsText, isVirtualServiceText } from "@/lib/analyzePayload";
 import { formatItemSummary } from "@/lib/format";
 import { buildOrderTitle, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
-import { createId, getCustomerMessages, getKnowledgeRules, getOrders, getRecognitionExperiences, getSettings, getTemplates, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveRecognitionExperiences, saveTemplates } from "@/lib/storage";
+import { createId, getCustomerMessages, getKnowledgeRules, getOrders, getRecognitionExperiences, getSettings, getTemplates, getWebhookTokenForClient, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveRecognitionExperiences, saveTemplates } from "@/lib/storage";
 import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, RecognitionExperience, SourcePlatform } from "@/lib/types";
 
 type MainColumn = "highIntent" | "sam" | "xianyu" | "local" | "trade" | "closed" | "archived";
@@ -222,10 +223,6 @@ function isHighIntent(message: CustomerMessage, orders: Order[]) {
 function isVirtualXianyu(message: CustomerMessage) {
   const text = [message.productName, message.productGuess, message.rawMessage, message.analysis?.summary, message.analysis?.customerIntent, ...(message.analysis?.products || []).map((item) => item.name)].join(" ");
   return isVirtualServiceText(text);
-}
-
-function isVirtualServiceText(text: string) {
-  return /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|翻译|设计|修图|提示词|prompt|报告|方案|咨询|字数|页数|交付)/i.test(text);
 }
 
 function getRecognitionText(group: CustomerFolderGroup) {
@@ -489,25 +486,18 @@ function groupLooksLikeVirtualService(group: CustomerFolderGroup, confirmedProdu
 async function requestFolderAnalysis(group: CustomerFolderGroup, confirmedProductName = "") {
   const settings = getSettings();
   const effectiveBusinessType: BusinessType = group.latest.businessType === "xianyu" && groupLooksLikeVirtualService(group, confirmedProductName) ? "virtual" : group.latest.businessType;
-  const useVirtualTemplates = effectiveBusinessType === "virtual";
-  const enabledTemplates = ensureTemplates()
-    .filter((template) => template.enabled && (template.businessType === effectiveBusinessType || (useVirtualTemplates && template.businessType === "virtual")))
-    .map(({ name, scenario, requiredInfo, content }) => ({ name, scenario, requiredInfo, content }));
-  const knowledgeRules = ensureKnowledgeRules()
-    .filter((rule) => rule.enabled && (rule.businessType === "all" || rule.businessType === effectiveBusinessType || (useVirtualTemplates && rule.businessType === "virtual")))
-    .map(({ title, category, content }) => ({ title, category, content }));
+  const payload = buildAnalyzePayload({
+    chatText: buildFolderAnalysisText(group, confirmedProductName),
+    businessType: effectiveBusinessType,
+    settings,
+    templates: ensureTemplates(),
+    knowledgeRules: ensureKnowledgeRules(),
+    platform: String(group.latest.platform || ""),
+  });
   const response = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chatText: buildFolderAnalysisText(group, confirmedProductName),
-      businessType: effectiveBusinessType,
-      systemPrompt: settings.systemPrompt,
-      sellerRules: settings.merchantRules,
-      enabledTemplates,
-      knowledgeRules,
-      responseMode: "fast",
-    }),
+    body: JSON.stringify(payload),
   });
   const data = (await response.json()) as AnalyzeApiResponse;
   if (!response.ok || data.error) throw new Error(data.error || "AI analysis failed");
@@ -517,8 +507,10 @@ async function requestFolderAnalysis(group: CustomerFolderGroup, confirmedProduc
 function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order | undefined, now: string, forcedStatus?: Order["status"], analysisOverride?: AnalyzeResult) {
   const analysis = analysisOverride || existingOrder?.analysis || group.latest.analysis || makeFallbackAnalysis(group);
   const effectiveBusinessType = getEffectiveBusinessType(group);
-  const confirmedProductName = group.latest.productName || group.latest.productGuess || "";
-  const products = confirmedProductName && confirmedProductName !== "待确认需求" ? [{ name: confirmedProductName, quantity: "1", unit: "项", notes: "来自消息中心商品识别", confidence: group.latest.productConfirmed ? "高" as const : "中" as const }] : analysis.products;
+  const confirmedProductName = group.latest.productConfirmed ? group.latest.productName || "" : "";
+  const products = confirmedProductName && confirmedProductName !== "待确认需求" && !isPhysicalGoodsText(formatItemSummary(analysis.products))
+    ? [{ name: confirmedProductName, quantity: "1", unit: "项", notes: "来自消息中心人工确认", confidence: "高" as const }]
+    : analysis.products.filter((item) => item.name !== "待确认虚拟服务" || isVirtualServiceText(group.messages.map((message) => message.rawMessage).join("\n")));
   const nextAnalysis = { ...analysis, products };
   const itemSummary = formatItemSummary(products) || existingOrder?.itemSummary || "待确认";
   const orderId = existingOrder?.id || createId("order");
@@ -699,10 +691,10 @@ export default function MessagesPage() {
 
   async function syncExternalMessages() {
     try {
-      const token = getSettings().inboxWebhookToken?.trim();
+      const token = await getWebhookTokenForClient();
       const response = await fetch("/api/inbox", {
         cache: "no-store",
-        headers: token ? { "x-inbox-token": token } : undefined,
+        headers: token ? { "x-webhook-token": token } : undefined,
       });
       const data = (await response.json()) as { messages?: CustomerMessage[]; error?: string };
       if (!response.ok || data.error) throw new Error(data.error || "sync failed");
@@ -721,6 +713,34 @@ export default function MessagesPage() {
     }
   }
 
+  useEffect(() => {
+    let cancelled = false;
+    async function autoSyncExternalMessages() {
+      try {
+        const token = await getWebhookTokenForClient();
+        const response = await fetch("/api/inbox", {
+          cache: "no-store",
+          headers: token ? { "x-webhook-token": token } : undefined,
+        });
+        const data = (await response.json()) as { messages?: CustomerMessage[] };
+        if (!response.ok) return;
+        const incoming = safeArray(data.messages);
+        if (cancelled || incoming.length === 0) return;
+        const merged = mergeCustomerMessages(messages, incoming, orders);
+        if (merged.changedCount > 0) persistMessages(merged.messages);
+      } catch {
+        // Silent background sync; the manual sync button still shows detailed errors.
+      }
+    }
+
+    autoSyncExternalMessages();
+    const timer = window.setInterval(autoSyncExternalMessages, 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [messages, orders]);
+
   function loadDemoMessages() {
     const existing = messages.filter((item) => !item.id.startsWith("msg_demo_"));
     persistMessages([...sampleMessages, ...existing]);
@@ -738,9 +758,13 @@ export default function MessagesPage() {
 
   async function clearServerFolder(target: CustomerMessage) {
     try {
+      const token = await getWebhookTokenForClient();
       await fetch("/api/inbox", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
         body: JSON.stringify({
           customerFolder: getFolderName(target),
           customerName: target.customerName,

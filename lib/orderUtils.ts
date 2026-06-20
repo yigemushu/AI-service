@@ -13,6 +13,7 @@ const virtualServicePattern =
   /(写作|代写|润色|改写|文案|小红书|公众号|脚本|检讨书|道歉|致歉|演讲稿|发言稿|申请书|读后感|观后感|PPT|ppt|简历|求职信|翻译|海报|logo|设计|修图|排版|AI生成|提示词|prompt|课程作业|报告|方案|咨询|字数|页数|交稿|交付|修改几次|源文件)/i;
 
 const physicalXianyuPattern = /(收货|自提|包邮|发货|物流|快递|库存|成色|商品状态|地址|联系电话|联系方式)/;
+const concretePhysicalGoodsPattern = /(榴莲|水果|牛肉卷|瑞士卷|鸡胸肉|烤鸡|麻薯|蛋糕|耳机|手机|相机|镜头|键盘|鼠标|鞋|平板|显示器|书|咖啡机|滤芯|规格|品种|配送|自提|库存|收货|发货)/;
 
 function safeString(value: unknown) {
   return typeof value === "string" ? value : String(value ?? "");
@@ -104,7 +105,9 @@ function collectOrderText(order: Order) {
 }
 
 function isVirtualServiceOrder(order: Order) {
-  return virtualServicePattern.test(collectOrderText(order));
+  const text = collectOrderText(order).replace(/待确认虚拟服务/g, "");
+  if (concretePhysicalGoodsPattern.test(text)) return false;
+  return virtualServicePattern.test(text);
 }
 
 function repairVirtualItemSummary(itemSummary: string, signalText = itemSummary) {
