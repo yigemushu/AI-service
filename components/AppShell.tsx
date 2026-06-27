@@ -5,7 +5,7 @@ import { AppNav } from "@/components/AppNav";
 import { primaryButtonClass, secondaryButtonClass } from "@/components/ui";
 import { isDemoAuthed, setDemoAuthed } from "@/lib/storage";
 
-const isDemoEnvironment = process.env.NEXT_PUBLIC_APP_ENV === "demo";
+const isDemoEnvironment = process.env.NEXT_PUBLIC_APP_ENV === "demo" || process.env.NODE_ENV === "development";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [authed, setAuthed] = useState(isDemoEnvironment);

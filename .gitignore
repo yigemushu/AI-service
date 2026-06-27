@@ -17,4 +17,7 @@ AI-service-v0.3-sync-patch.ps1
 data/inbox-messages.json
 data/orders.json
 data/app-settings.json
+data/outbox-commands.json
+data/browser-plugin-status.json
+data/xianyu-verification-records.json
 .local-server-supervisor.pid

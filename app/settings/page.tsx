@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
@@ -234,6 +235,7 @@ export default function SettingsPage() {
             <button type="button" className={primaryButtonClass} onClick={generatePluginCode} disabled={!canGenerateCode}>生成插件连接码</button>
             <button type="button" className={secondaryButtonClass} onClick={() => copyText(pluginCode, "已复制插件连接码")} disabled={!pluginCode}>复制插件连接码</button>
             <button type="button" className={secondaryButtonClass} onClick={loadEffectiveToken}>重新读取当前 Token</button>
+            <Link className={secondaryButtonClass} href="/xianyu-mvp">打开闲鱼闭环验证</Link>
           </div>
 
           <textarea className={`${textareaClass} min-h-24 font-mono text-xs`} value={pluginCode} readOnly placeholder={canGenerateCode ? "点击“生成插件连接码”后显示 aics_ 开头的连接码" : "当前没有可用 Token，暂不能生成连接码"} />

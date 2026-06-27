@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI 客服接单助手",
-  "version": "0.2.0",
-  "description": "选中网页里的客户消息，发送到 AI 客服接单台，或直接生成回复草稿。",
-  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "notifications"],
+  "version": "0.3.0",
+  "description": "选中网页里的客户消息，发送到 AI 客服接单台，或在闲鱼聊天页自动同步新消息。",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "notifications", "alarms", "tabs"],
   "host_permissions": ["http://localhost:3000/*", "http://127.0.0.1:3000/*", "https://*/*", "http://*/*"],
   "action": {
     "default_title": "AI 客服助手",
@@ -12,6 +12,13 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://www.goofish.com/*", "https://*.goofish.com/*", "https://2.taobao.com/*", "https://*.2.taobao.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "commands": {
     "send-selected-message": {
       "suggested_key": {

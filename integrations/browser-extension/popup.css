@@ -68,6 +68,15 @@ label {
   font-weight: 700;
 }
 
+.checkbox-row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 8px;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+
 input,
 select,
 textarea,
@@ -82,6 +91,13 @@ textarea,
   font-size: 13px;
   outline: none;
   padding: 8px;
+}
+
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  padding: 0;
 }
 
 textarea {
@@ -167,4 +183,57 @@ button:disabled {
   color: #92400e;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.diagnostics {
+  margin-top: 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 8px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diagnostics strong {
+  color: #0f172a;
+}
+
+.diagnostics ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.status-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.status-card {
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 8px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.status-card.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.status-card.error {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.status-card strong {
+  color: inherit;
 }

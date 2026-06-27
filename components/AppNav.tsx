@@ -8,6 +8,7 @@ import type { CustomerMessage, Order } from "@/lib/types";
 
 const navItems: Array<{ href: string; label: string; badge?: "newOrders" | "newMessages" }> = [
   { href: "/", label: "工作台" },
+  { href: "/xianyu-mvp", label: "闲鱼验证" },
   { href: "/messages", label: "消息中心", badge: "newMessages" },
   { href: "/orders", label: "客户订单", badge: "newOrders" },
   { href: "/knowledge", label: "商家知识库" },

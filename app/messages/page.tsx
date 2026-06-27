@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
 import { inputClass, primaryButtonClass, secondaryButtonClass, textareaClass } from "@/components/ui";
@@ -10,7 +10,7 @@ import { buildAnalyzePayload, isPhysicalGoodsText, isVirtualServiceText } from "
 import { formatItemSummary } from "@/lib/format";
 import { buildOrderTitle, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
 import { createId, getCustomerMessages, getKnowledgeRules, getOrders, getRecognitionExperiences, getSettings, getTemplates, getWebhookTokenForClient, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveRecognitionExperiences, saveTemplates } from "@/lib/storage";
-import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, RecognitionExperience, SourcePlatform } from "@/lib/types";
+import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, OutboundReplyCommand, OutboundReplyStatus, RecognitionExperience, SourcePlatform } from "@/lib/types";
 
 type MainColumn = "highIntent" | "sam" | "xianyu" | "local" | "trade" | "closed" | "archived";
 
@@ -31,6 +31,15 @@ type ProductGuess = {
 };
 
 const platformOptions: Array<SourcePlatform | string> = ["闲鱼", "微信", "淘宝", "拼多多", "Facebook", "eBay", "其他"];
+
+const outboundStatusLabels: Record<OutboundReplyStatus, string> = {
+  pending: "待插件处理",
+  processing: "插件处理中",
+  filled: "已回填输入框",
+  sent: "已发送",
+  failed: "发送失败",
+  cancelled: "已取消",
+};
 
 const mainColumns: Array<{ id: MainColumn; label: string; description: string }> = [
   { id: "highIntent", label: "高意向客户", description: "优先处理接近成交的客户" },
@@ -404,6 +413,20 @@ function getColumnTheme(column: MainColumn) {
   return themes[column];
 }
 
+function getOutboundStatusClass(status: OutboundReplyStatus) {
+  if (status === "sent" || status === "filled") return "bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "bg-rose-50 text-rose-700";
+  if (status === "processing") return "bg-sky-50 text-sky-700";
+  if (status === "cancelled") return "bg-slate-100 text-slate-600";
+  return "bg-amber-50 text-amber-700";
+}
+
+function getOutboundModeLabel(mode: OutboundReplyCommand["mode"]) {
+  if (mode === "send") return "代点击发送";
+  if (mode === "fill") return "只回填";
+  return "按插件设置";
+}
+
 function groupByFolder(messages: CustomerMessage[]) {
   const groups = new Map<string, CustomerMessage[]>();
   for (const message of messages) {
@@ -535,6 +558,7 @@ function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order |
     updatedAt: now,
     isNew: true,
     rawMessage: group.messages.map((message) => message.rawMessage).join("\n\n"),
+    sourceUrl: existingOrder?.sourceUrl || group.latest.sourceUrl || group.messages.find((message) => message.sourceUrl)?.sourceUrl || "",
     analysis: nextAnalysis,
     conversation,
     history: [
@@ -547,6 +571,7 @@ function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order |
 
 export default function MessagesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<CustomerMessage[]>(() => getCustomerMessages());
   const [orders, setOrders] = useState<Order[]>(() => getOrders().map(normalizeOrder));
   const [recognitionExperiences, setRecognitionExperiences] = useState<RecognitionExperience[]>(() => getRecognitionExperiences());
@@ -561,6 +586,8 @@ export default function MessagesPage() {
   const [sourceUrl, setSourceUrl] = useState("");
   const [notice, setNotice] = useState("");
   const [processingFolder, setProcessingFolder] = useState("");
+  const [outboundFolder, setOutboundFolder] = useState("");
+  const [outboundCommands, setOutboundCommands] = useState<OutboundReplyCommand[]>([]);
 
   const columnMessages = useMemo(() => messages.filter((message) => belongsToColumn(message, activeColumn, orders)), [messages, activeColumn, orders]);
   const subGroups = useMemo(() => {
@@ -578,10 +605,44 @@ export default function MessagesPage() {
   const selectedOrder = selectedGroup ? orders.find((order) => order.id === selectedGroup.latest.linkedOrderId) || orders.find((order) => (order.customerFolder || order.customerName) === selectedGroup.folder && order.platform === selectedGroup.latest.platform) : undefined;
   const selectedGuess = selectedGroup ? inferProductGuess(selectedGroup, recognitionExperiences) : undefined;
   const selectedSubCategory = selectedGroup ? getSubCategory(selectedGroup.latest, activeColumn) : "";
+  const selectedOutboundCommands = useMemo(() => {
+    if (!selectedGroup) return [];
+    return outboundCommands
+      .filter((command) => command.customerFolder === selectedGroup.folder || command.messageId === selectedGroup.latest.id || (selectedOrder?.id && command.orderId === selectedOrder.id))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [outboundCommands, selectedGroup, selectedOrder?.id]);
+
+  useEffect(() => {
+    const messageId = searchParams.get("messageId") || "";
+    const folder = searchParams.get("folder") || "";
+    if (!messageId && !folder) return;
+    const target = messageId
+      ? messages.find((message) => message.id === messageId)
+      : messages.find((message) => getFolderName(message) === folder);
+    if (!target) return;
+    setActiveColumn(columnForBusinessType(target.businessType));
+    setSelectedFolder(getFolderName(target));
+  }, [messages, searchParams]);
 
   useEffect(() => {
     setEditedProductName(selectedGuess?.productName || "");
   }, [selectedGroup?.folder, selectedGuess?.productName]);
+
+  useEffect(() => {
+    const successful = outboundCommands.filter((command) => command.status === "filled" || command.status === "sent");
+    if (!successful.length) return;
+    const successfulFolders = new Set(successful.map((command) => command.customerFolder).filter(Boolean));
+    const successfulMessageIds = new Set(successful.map((command) => command.messageId).filter(Boolean));
+    let changed = false;
+    const now = new Date().toISOString();
+    const nextMessages = messages.map((message) => {
+      const matched = successfulMessageIds.has(message.id) || successfulFolders.has(getFolderName(message));
+      if (!matched || message.status === "已回复") return message;
+      changed = true;
+      return { ...message, status: "已回复" as const, isNew: false, updatedAt: now };
+    });
+    if (changed) persistMessages(nextMessages);
+  }, [outboundCommands]);
 
   function persistMessages(next: CustomerMessage[]) {
     setMessages(next);
@@ -597,6 +658,45 @@ export default function MessagesPage() {
   function persistRecognitionExperiences(next: RecognitionExperience[]) {
     setRecognitionExperiences(next);
     saveRecognitionExperiences(next);
+  }
+
+  async function refreshOutboundCommands(silent = true) {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch(`/api/outbox?status=all&platform=${encodeURIComponent("闲鱼")}`, {
+        cache: "no-store",
+        headers: token ? { "x-webhook-token": token } : undefined,
+      });
+      const data = (await response.json()) as { commands?: OutboundReplyCommand[]; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "sync outbox failed");
+      setOutboundCommands(safeArray(data.commands));
+    } catch (error) {
+      if (!silent) {
+        const message = error instanceof Error ? error.message : "同步发送状态失败";
+        setNotice(`同步闲鱼发送状态失败：${message}`);
+      }
+    }
+  }
+
+  async function retryOutboundCommand(command: OutboundReplyCommand) {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/outbox", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({ id: command.id, status: "pending" }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "retry failed");
+      await refreshOutboundCommands(true);
+      setNotice("已重新放回待发送队列，插件会再次处理。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "重试失败";
+      setNotice(`重试闲鱼发送任务失败：${message}`);
+    }
   }
 
   function selectFolder(folder: string) {
@@ -740,6 +840,12 @@ export default function MessagesPage() {
       window.clearInterval(timer);
     };
   }, [messages, orders]);
+
+  useEffect(() => {
+    refreshOutboundCommands(true);
+    const timer = window.setInterval(() => refreshOutboundCommands(true), 8000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function loadDemoMessages() {
     const existing = messages.filter((item) => !item.id.startsWith("msg_demo_"));
@@ -914,6 +1020,132 @@ export default function MessagesPage() {
       ),
     );
     router.push(`/orders/${orderId}`);
+  }
+
+  async function sendReplyToPlatform(group: CustomerFolderGroup) {
+    if (String(group.latest.platform) !== "闲鱼") {
+      setNotice("当前先支持发送回闲鱼，其他平台等平台适配器接入后再开放。");
+      return;
+    }
+    if (!group.latest.sourceUrl) {
+      setNotice("这个客户缺少原平台链接，插件不知道要发回哪个闲鱼聊天页。请先从插件同步消息，或补上原平台链接。");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const existingOrder = orders.find((order) => order.id === group.latest.linkedOrderId) || orders.find((order) => (order.customerFolder || order.customerName) === group.folder && order.platform === group.latest.platform);
+    let workingOrders = orders;
+    let workingMessages = messages;
+    let orderForRecord = existingOrder;
+    let analysis = existingOrder?.analysis || group.latest.analysis;
+
+    try {
+      setOutboundFolder(group.folder);
+      if (!analysis?.reply) {
+        setNotice("正在生成推荐回复，然后发送到闲鱼...");
+        const effectiveBusinessType = getEffectiveBusinessType(group);
+        const groupForOrder: CustomerFolderGroup = {
+          ...group,
+          latest: { ...group.latest, businessType: effectiveBusinessType },
+          messages: group.messages.map((message) => ({ ...message, businessType: effectiveBusinessType })),
+        };
+        analysis = await requestFolderAnalysis(groupForOrder, group.latest.productName || group.latest.productGuess || "");
+        const nextOrder = buildOrderFromFolder(groupForOrder, existingOrder, now, undefined, analysis);
+        orderForRecord = nextOrder;
+        workingOrders = existingOrder ? orders.map((order) => (order.id === existingOrder.id ? nextOrder : order)) : [nextOrder, ...orders];
+        persistOrders(workingOrders);
+        workingMessages = messages.map((message) =>
+          getFolderName(message) === group.folder
+            ? { ...message, businessType: effectiveBusinessType, linkedOrderId: nextOrder.id, analysis, status: message.status === "未处理" ? "已分析" : message.status, isNew: false, updatedAt: now }
+            : message,
+        );
+        persistMessages(workingMessages);
+      }
+
+      if (!orderForRecord && analysis?.reply) {
+        const effectiveBusinessType = getEffectiveBusinessType(group);
+        const groupForOrder: CustomerFolderGroup = {
+          ...group,
+          latest: { ...group.latest, businessType: effectiveBusinessType, analysis },
+          messages: group.messages.map((message) => ({ ...message, businessType: effectiveBusinessType })),
+        };
+        const nextOrder = buildOrderFromFolder(groupForOrder, undefined, now, undefined, analysis);
+        orderForRecord = nextOrder;
+        workingOrders = [nextOrder, ...workingOrders];
+        persistOrders(workingOrders);
+        workingMessages = workingMessages.map((message) =>
+          getFolderName(message) === group.folder
+            ? {
+                ...message,
+                businessType: effectiveBusinessType,
+                linkedOrderId: nextOrder.id,
+                analysis: message.analysis || analysis,
+                status: message.status === "未处理" ? "已分析" : message.status,
+                isNew: false,
+                updatedAt: now,
+              }
+            : message,
+        );
+        persistMessages(workingMessages);
+      }
+
+      const reply = analysis?.reply || makeFallbackAnalysis(group).reply;
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/outbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({
+          messageId: group.latest.id,
+          orderId: orderForRecord?.id || "",
+          customerFolder: group.folder,
+          customerName: group.latest.customerName,
+          platform: group.latest.platform,
+          sourceUrl: group.latest.sourceUrl,
+          reply,
+          mode: "plugin-default",
+        }),
+      });
+      const data = (await response.json()) as { command?: { id?: string }; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "创建发送任务失败");
+      await refreshOutboundCommands(true);
+
+      const sentAt = new Date().toISOString();
+      const assistantTurn: ConversationTurn = { id: `turn_${Date.now()}_assistant`, role: "assistant", content: reply, createdAt: sentAt };
+      const nextMessages = workingMessages.map((message) =>
+        getFolderName(message) === group.folder
+          ? {
+              ...message,
+              status: message.status === "未处理" ? "已分析" as const : message.status,
+              isNew: false,
+              updatedAt: sentAt,
+              conversation: [...getMessageConversation(message), assistantTurn],
+            }
+          : message,
+      );
+      persistMessages(nextMessages);
+      if (orderForRecord) {
+        const nextOrders = workingOrders.map((order) =>
+          order.id === orderForRecord?.id
+            ? normalizeOrder({
+                ...order,
+                updatedAt: sentAt,
+                conversation: [...(order.conversation || []), assistantTurn],
+                history: [...(order.history || []), createOrderHistoryEvent("follow_up", "已创建闲鱼发送任务", `任务ID：${data.command?.id || "待插件同步"}\n回复：${reply}`, sentAt)],
+              })
+            : order,
+        );
+        persistOrders(nextOrders);
+      }
+      setNotice("已创建闲鱼发送任务。插件会在打开的闲鱼聊天页回填或发送这条回复。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "发送任务创建失败";
+      setNotice(`发送回闲鱼失败：${message}`);
+    } finally {
+      setOutboundFolder("");
+    }
   }
 
   function selectColumn(column: MainColumn) {
@@ -1095,6 +1327,9 @@ export default function MessagesPage() {
                     <button className={primaryButtonClass} onClick={() => openOrderProcessing(selectedGroup)} disabled={processingFolder === selectedGroup.folder}>
                       {processingFolder === selectedGroup.folder ? "生成推荐回复中..." : "进入客户订单处理"}
                     </button>
+                    <button className={secondaryButtonClass} onClick={() => sendReplyToPlatform(selectedGroup)} disabled={outboundFolder === selectedGroup.folder}>
+                      {outboundFolder === selectedGroup.folder ? "正在创建发送任务..." : "发送回闲鱼"}
+                    </button>
                     {activeColumn === "closed" ? (
                       <button className={secondaryButtonClass} onClick={() => markFolderUnclosed(selectedGroup)}>未成交</button>
                     ) : (
@@ -1104,6 +1339,41 @@ export default function MessagesPage() {
                     <button className="inline-flex min-h-10 items-center justify-center rounded-md border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-600 shadow-sm shadow-amber-100/60 transition hover:bg-rose-50" onClick={() => deleteFolder(selectedGroup)}>删除文件夹</button>
                   </div>
                   {selectedOrder ? <div className="rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-800">已连接客户订单：{selectedOrder.orderTitle || selectedOrder.customerName}</div> : null}
+                  <div className="rounded-2xl border border-white bg-white/90 p-4 text-sm shadow-sm ring-1 ring-slate-100">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-semibold text-slate-950">闲鱼发送状态</div>
+                      <button className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => refreshOutboundCommands(false)}>刷新</button>
+                    </div>
+                    {selectedOutboundCommands.length ? (
+                      <div className="mt-3 space-y-2">
+                        {selectedOutboundCommands.slice(0, 3).map((command) => (
+                          <div key={command.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getOutboundStatusClass(command.status)}`}>{outboundStatusLabels[command.status]}</span>
+                              <span className="text-xs text-slate-500">{getOutboundModeLabel(command.mode)} · {new Date(command.updatedAt).toLocaleString()}</span>
+                            </div>
+                            <div className="mt-2 line-clamp-2 whitespace-pre-line text-slate-700">{command.reply}</div>
+                            {command.error ? <div className="mt-2 text-xs font-medium text-rose-600">{command.error}</div> : null}
+                            {command.status === "failed" || command.status === "cancelled" ? (
+                              <button className="mt-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => retryOutboundCommand(command)}>重试</button>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">还没有发送回闲鱼的任务。</div>
+                    )}
+                  </div>
+                  {(selectedOrder?.analysis.reply || selectedGroup.latest.analysis?.reply) ? (
+                    <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4 text-sm text-slate-700">
+                      <div className="font-semibold text-slate-950">待发送回复</div>
+                      <div className="mt-2 whitespace-pre-line leading-6">{selectedOrder?.analysis.reply || selectedGroup.latest.analysis?.reply}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+                      这个客户还没有推荐回复。点击“发送回闲鱼”时，系统会先生成回复，再创建发送任务。
+                    </div>
+                  )}
                 </div>
                 <div className={`rounded-2xl border border-white bg-gradient-to-br ${activeTheme.panel} p-4 shadow-sm ring-1 ring-slate-100`}>
                   <div className="text-sm font-semibold text-slate-950">最近消息</div>

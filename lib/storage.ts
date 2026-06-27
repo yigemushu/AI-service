@@ -1,7 +1,7 @@
 "use client";
 
 import { defaultSettings } from "./constants";
-import type { CustomerMessage, EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, RecognitionExperience, Settings } from "./types";
+import type { CustomerMessage, EvaluationRun, FeedbackRecord, KnowledgeRule, MessageTemplate, OptimizationRecord, Order, RecognitionExperience, Settings, XianyuMvpTestSession, XianyuMvpVerificationRecord } from "./types";
 
 const keys = {
   orders: "ai-service.orders",
@@ -13,6 +13,8 @@ const keys = {
   knowledgeRules: "ai-service.knowledge-rules",
   recognitionExperiences: "ai-service.recognition-experiences",
   feedback: "ai-service.feedback",
+  xianyuVerificationRecords: "ai-service.xianyu-verification-records",
+  xianyuTestSession: "ai-service.xianyu-test-session",
   demoAuth: "ai-service.demo-auth",
 };
 
@@ -115,6 +117,24 @@ export function getFeedbackRecords() {
 
 export function saveFeedbackRecords(records: FeedbackRecord[]) {
   writeJson(keys.feedback, records);
+}
+
+export function getXianyuVerificationRecords() {
+  return readJson<XianyuMvpVerificationRecord[]>(keys.xianyuVerificationRecords, []);
+}
+
+export function saveXianyuVerificationRecords(records: XianyuMvpVerificationRecord[]) {
+  writeJson(keys.xianyuVerificationRecords, records);
+  window.dispatchEvent(new Event("xianyu-verification-records-updated"));
+}
+
+export function getXianyuTestSession() {
+  return readJson<XianyuMvpTestSession | null>(keys.xianyuTestSession, null);
+}
+
+export function saveXianyuTestSession(session: XianyuMvpTestSession) {
+  writeJson(keys.xianyuTestSession, session);
+  window.dispatchEvent(new Event("xianyu-test-session-updated"));
 }
 
 export function getSettings() {

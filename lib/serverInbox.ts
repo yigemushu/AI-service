@@ -15,6 +15,15 @@ type InboxPayload = {
   sourceUrl?: unknown;
 };
 
+type OutboundInboxUpdatePayload = {
+  messageId?: unknown;
+  customerFolder?: unknown;
+  sourceUrl?: unknown;
+  orderId?: unknown;
+  reply?: unknown;
+  status?: unknown;
+};
+
 function safeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -46,6 +55,16 @@ function normalizeUrl(value: string) {
     return `${url.origin}${url.pathname}`;
   } catch {
     return value.split(/[?#]/)[0] || "";
+  }
+}
+
+function normalizeComparableUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return `${url.origin}${url.pathname}${url.search}`;
+  } catch {
+    return value.split("#")[0] || "";
   }
 }
 
@@ -166,4 +185,45 @@ export async function deleteServerInboxCustomer(payload: InboxPayload) {
   });
   await writeInboxFile(next);
   return { deleted: messages.length - next.length };
+}
+
+export async function updateServerInboxForOutboundReply(payload: OutboundInboxUpdatePayload) {
+  const messages = await readInboxFile();
+  const messageId = safeString(payload.messageId);
+  const sourceUrl = normalizeComparableUrl(safeString(payload.sourceUrl));
+  const customerFolder = safeString(payload.customerFolder).toLowerCase();
+  const index = messages.findIndex((message) => {
+    if (messageId && message.id === messageId) return true;
+    if (sourceUrl && normalizeComparableUrl(message.sourceUrl || "") === sourceUrl) return true;
+    if (customerFolder && String(message.customerFolder || "").trim().toLowerCase() === customerFolder) return true;
+    return false;
+  });
+  if (index < 0) return undefined;
+
+  const existing = messages[index];
+  const now = new Date().toISOString();
+  const reply = safeString(payload.reply);
+  const orderId = safeString(payload.orderId);
+  const outboundStatus = safeString(payload.status);
+  const nextStatus = outboundStatus === "filled" || outboundStatus === "sent"
+    ? "已回复"
+    : existing.status === "未处理"
+      ? "已分析"
+      : existing.status;
+  const conversation = existing.conversation || [{ id: `${existing.id}_initial`, role: "customer" as const, content: existing.rawMessage, createdAt: existing.createdAt }];
+  const shouldAppendReply = reply && !conversation.some((turn) => turn.role === "assistant" && turn.content === reply);
+  const updated: CustomerMessage = {
+    ...existing,
+    linkedOrderId: orderId || existing.linkedOrderId,
+    status: nextStatus,
+    isNew: false,
+    updatedAt: now,
+    conversation: shouldAppendReply
+      ? [...conversation, { id: `${createServerId()}_assistant_outbox`, role: "assistant", content: reply, createdAt: now }]
+      : conversation,
+  };
+
+  const next = [updated, ...messages.filter((_, itemIndex) => itemIndex !== index)].slice(0, 500);
+  await writeInboxFile(next);
+  return updated;
 }

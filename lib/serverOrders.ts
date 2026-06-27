@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { formatItemSummary } from "./format";
 import { buildOrderTitle, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "./orderUtils";
-import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, Order } from "./types";
+import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, Order } from "./types";
 
 const ordersFilePath = path.join(process.cwd(), "data", "orders.json");
 
@@ -21,6 +21,17 @@ type ExtensionOrderPayload = {
   riskFlags?: unknown;
   items?: unknown;
   createdAt?: unknown;
+  sourceUrl?: unknown;
+};
+
+type OutboundOrderPayload = {
+  orderId?: unknown;
+  messageId?: unknown;
+  customerFolder?: unknown;
+  customerName?: unknown;
+  platform?: unknown;
+  sourceUrl?: unknown;
+  reply?: unknown;
 };
 
 function safeString(value: unknown) {
@@ -93,6 +104,16 @@ function normalizeKeyPart(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "");
 }
 
+function normalizeUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return `${url.origin}${url.pathname}${url.search}`;
+  } catch {
+    return value.split("#")[0];
+  }
+}
+
 function isDuplicate(candidate: Order, existing: Order) {
   const sameSource = normalizeKeyPart(candidate.note).includes("browser-extension") && normalizeKeyPart(existing.note).includes("browser-extension");
   if (!sameSource) return false;
@@ -141,6 +162,7 @@ export async function addServerOrder(payload: ExtensionOrderPayload) {
     updatedAt: now,
     isNew: true,
     rawMessage,
+    sourceUrl: safeString(payload.sourceUrl),
     analysis,
     conversation,
     history: [createOrderHistoryEvent("created", "浏览器插件创建订单", `客户：${customerName}`, createdAt)],
@@ -153,4 +175,83 @@ export async function addServerOrder(payload: ExtensionOrderPayload) {
   const next = [order, ...orders].slice(0, 1000);
   await writeOrdersFile(next);
   return { order, duplicate: false };
+}
+
+export async function ensureServerOrderForOutboundReply(payload: OutboundOrderPayload, sourceMessage?: CustomerMessage) {
+  const orders = await readOrdersFile();
+  const orderId = safeString(payload.orderId);
+  if (orderId) {
+    const existing = orders.find((order) => order.id === orderId);
+    if (existing) return { order: existing, created: false };
+  }
+
+  const sourceUrl = safeString(payload.sourceUrl) || sourceMessage?.sourceUrl || "";
+  const normalizedSourceUrl = normalizeUrl(sourceUrl);
+  const customerFolder = safeString(payload.customerFolder) || sourceMessage?.customerFolder || "";
+  const customerName = safeString(payload.customerName) || sourceMessage?.customerName || "待识别客户";
+  const platform = safeString(payload.platform) || String(sourceMessage?.platform || "闲鱼");
+  const existingByContext = orders.find((order) => {
+    const sameUrl = normalizedSourceUrl && normalizeUrl(order.sourceUrl || "") === normalizedSourceUrl;
+    const sameFolder = customerFolder && normalizeKeyPart(order.customerFolder || order.customerName) === normalizeKeyPart(customerFolder);
+    const samePlatform = normalizeKeyPart(String(order.platform || "")) === normalizeKeyPart(platform);
+    return samePlatform && (sameUrl || sameFolder);
+  });
+  if (existingByContext) return { order: existingByContext, created: false };
+
+  const rawMessage = sourceMessage?.rawMessage || "";
+  if (!rawMessage.trim()) return { order: undefined, created: false };
+
+  const now = new Date().toISOString();
+  const reply = safeString(payload.reply);
+  const businessType = normalizeBusinessType(sourceMessage?.businessType);
+  const analysis: AnalyzeResult = sourceMessage?.analysis || {
+    customerIntent: rawMessage.slice(0, 80),
+    products: [{ name: "待确认", quantity: "1", unit: "", notes: "", confidence: "中" }],
+    missingInfo: [],
+    risks: [],
+    nextActions: [],
+    reply,
+    summary: rawMessage.slice(0, 80),
+    customerName,
+    platform,
+    orderStatus: "待确认",
+    urgency: "medium",
+  };
+  const nextAnalysis: AnalyzeResult = { ...analysis, reply: analysis.reply || reply };
+  const itemSummary = formatItemSummary(nextAnalysis.products) || "待确认";
+  const conversation: ConversationTurn[] = [
+    ...(sourceMessage?.conversation || [{ id: `turn_${Date.now()}_customer`, role: "customer", content: rawMessage, createdAt: sourceMessage?.createdAt || now }]),
+  ];
+  if (reply && !conversation.some((turn) => turn.role === "assistant" && turn.content === reply)) {
+    conversation.push({ id: `turn_${Date.now()}_assistant_outbox`, role: "assistant", content: reply, createdAt: now });
+  }
+
+  const order = normalizeOrder({
+    id: createServerId(),
+    orderTitle: buildOrderTitle({ customerName, itemSummary, summary: nextAnalysis.summary }),
+    customerFolder: customerFolder || customerName,
+    customerName,
+    platform,
+    businessType,
+    summary: nextAnalysis.summary || rawMessage.slice(0, 80),
+    itemSummary,
+    status: mapOrderStatus(nextAnalysis.orderStatus, nextAnalysis.missingInfo),
+    intentLevel: inferIntentLevel(nextAnalysis.urgency, nextAnalysis.missingInfo),
+    note: "来源：outbox-auto-order",
+    createdAt: sourceMessage?.createdAt || now,
+    updatedAt: now,
+    isNew: true,
+    rawMessage,
+    sourceUrl,
+    analysis: nextAnalysis,
+    conversation,
+    history: [
+      createOrderHistoryEvent("created", "发送回闲鱼前自动创建订单", `客户：${customerName}\n来源消息：${sourceMessage?.id || "按链接匹配"}`, now),
+      createOrderHistoryEvent("follow_up", "已创建闲鱼发送任务", reply ? `回复：${reply}` : "回复内容已进入发送任务", now),
+    ],
+  });
+
+  const next = [order, ...orders].slice(0, 1000);
+  await writeOrdersFile(next);
+  return { order, created: true };
 }

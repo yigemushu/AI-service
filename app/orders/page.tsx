@@ -281,6 +281,7 @@ function buildOrderFromMessageGroup(messages: CustomerMessage[], existingOrder?:
     updatedAt: now,
     isNew: latest.isNew,
     rawMessage: messages.map((message) => message.rawMessage).join("\n\n"),
+    sourceUrl: existingOrder?.sourceUrl || latest.sourceUrl || messages.find((message) => message.sourceUrl)?.sourceUrl || "",
     analysis,
     conversation: messages.flatMap(getMessageConversation).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     history: existingOrder?.history || [createOrderHistoryEvent("created", "从消息中心同步订单", `客户文件夹：${folder}\n消息数：${messages.length}`, now)],

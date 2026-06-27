@@ -92,6 +92,36 @@
       </details>
 
       <section class="panel">
+        <div class="section-title">自动同步</div>
+        <label class="checkbox-row">
+          <input id="autoSyncEnabled" type="checkbox" />
+          <span>在闲鱼聊天页自动同步新买家消息到消息中心</span>
+        </label>
+        <label class="checkbox-row">
+          <input id="outboundSyncEnabled" type="checkbox" />
+          <span>允许工作台把确认后的回复同步回闲鱼</span>
+        </label>
+        <label>
+          同步回闲鱼后的动作
+          <select id="outboundMode">
+            <option value="fill">只填入输入框，我再确认发送</option>
+            <option value="send">直接代我点击发送</option>
+          </select>
+        </label>
+        <p class="hint">开启后需要保持闲鱼聊天页打开并已登录。默认只把回复填入输入框；选择代发模式后，才会点击发送。</p>
+        <div class="button-row">
+          <button id="diagnosePage" type="button">诊断当前闲鱼页面</button>
+          <button id="copyDiagnostics" type="button" disabled>复制诊断结果</button>
+          <button id="syncLatestPageMessage" type="button">同步当前页最新消息</button>
+        </div>
+        <div class="status-grid" aria-live="polite">
+          <div id="autoSyncStatusPanel" class="status-card muted">自动同步：暂无记录</div>
+          <div id="outboundStatusPanel" class="status-card muted">回闲鱼：暂无记录</div>
+        </div>
+        <div id="diagnosticsPanel" class="diagnostics hidden"></div>
+      </section>
+
+      <section class="panel">
         <div class="section-title">客户消息</div>
         <label>
           选中或输入的客户消息
@@ -127,6 +157,12 @@
           <button id="saveOrder" type="button">保存订单</button>
         </div>
         <button id="openMessages" type="button">打开消息中心 / 保存订单</button>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">实机验收</div>
+        <p class="hint">测试闲鱼完整闭环时，打开验证页查看测试码、下一步提示和验收证据。</p>
+        <button id="openXianyuMvp" type="button">打开闲鱼闭环验证</button>
       </section>
 
       <p id="status" aria-live="polite"></p>

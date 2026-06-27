@@ -466,6 +466,18 @@ function isCustomerQuestionTurn(signalText: string, businessType: BusinessType, 
 function buildCustomerQuestionReply(signalText: string, itemText: string, isVirtualXianyu: boolean) {
   const signal = signalText.trim();
   const serviceName = itemText || "这个需求";
+  if (/包邮|邮费|运费|快递费/.test(signal) && /什么意思|是什么|怎么算|包不包|可以吗|能不能|吗|？|\?/.test(signal)) {
+    return "包邮就是这单的快递费由卖家承担，你这边不用另外付运费。\n\n不过我需要先确认下商品价格、收货地和快递成本，能包的话我会直接跟你说清楚哈~";
+  }
+  if (/发货|寄出|快递/.test(signal) && /什么时候|多久|今天|明天|能不能|可以吗|吗|？|\?/.test(signal)) {
+    return "发货时间我先帮你确认下。\n\n我需要看一下商品状态和今天快递截止时间，确认能发再给你准话，不先乱承诺哈~";
+  }
+  if (/自提|当面|面交/.test(signal) && /什么意思|是什么|可以吗|能不能|怎么|吗|？|\?/.test(signal)) {
+    return "自提就是你到约定地点当面拿货，一般不用走快递。\n\n具体地点和时间我需要先确认方便程度，合适的话再跟你定哈~";
+  }
+  if (/成色|几成新|新旧|瑕疵/.test(signal) && /什么意思|怎么样|可以吗|吗|？|\?/.test(signal)) {
+    return "成色就是商品的新旧程度和有没有明显瑕疵。\n\n我可以再帮你确认一下外观、功能和细节图，有问题会提前说清楚哈~";
+  }
   if (/修改次数|要不要改|需不需要改|修改/.test(signal) && /草稿|没看到|没看见|没收到/.test(signal)) {
     return "没事，你还没看到草稿的话不用先决定要不要修改。\n\n修改次数就是草稿出来后，我按同一个方向帮你调整几轮，比如措辞、语气、细节这些。先按正常文字格式来就行，你看完哪里不合适再跟我说哈~";
   }
@@ -849,7 +861,22 @@ export async function POST(request: Request) {
       provider: safeString(process.env.AI_PROVIDER || "openai"),
     });
     stage = "provider_call";
-    const result = process.env.OPENAI_API_KEY ? await analyzeWithOpenAI(body) : mockAnalyze(body);
+    let result: AnalyzeApiResponse;
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        result = await analyzeWithOpenAI(body);
+      } catch (providerError) {
+        console.warn("[api/analyze] provider failed, using mock fallback", {
+          requestId,
+          provider: safeString(process.env.AI_PROVIDER || "openai"),
+          errorName: providerError instanceof Error ? providerError.name : "UnknownError",
+          errorMessage: providerError instanceof Error ? providerError.message.slice(0, 300) : safeString(providerError).slice(0, 300),
+        });
+        result = mockAnalyze(body);
+      }
+    } else {
+      result = mockAnalyze(body);
+    }
     stage = "response_normalize";
     const normalized = normalizeAnalysis(result, body);
     console.info("[api/analyze] succeeded", { requestId, mode: body.mode, durationMs: Date.now() - startedAt, itemCount: normalized.items.length });

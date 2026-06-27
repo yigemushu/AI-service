@@ -44,6 +44,41 @@ export type ConversationTurn = {
   createdAt: string;
 };
 
+export type OutboundReplyStatus = "pending" | "processing" | "filled" | "sent" | "failed" | "cancelled";
+
+export type OutboundReplyCommand = {
+  id: string;
+  messageId?: string;
+  orderId?: string;
+  customerFolder: string;
+  customerName: string;
+  platform: SourcePlatform | string;
+  sourceUrl: string;
+  reply: string;
+  mode: "fill" | "send" | "plugin-default";
+  status: OutboundReplyStatus;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BrowserPluginStatusKind = "config" | "autoSync" | "outbound";
+
+export type BrowserPluginStatus = {
+  id: string;
+  kind: BrowserPluginStatusKind;
+  ok: boolean;
+  platform: SourcePlatform | string;
+  sourceUrl?: string;
+  commandId?: string;
+  messageId?: string;
+  mode?: "fill" | "send" | "plugin-default" | string;
+  action?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type OrderHistoryEvent = {
   id: string;
   type: "created" | "status_changed" | "reply_generated" | "follow_up" | "note_updated" | "completed";
@@ -68,6 +103,7 @@ export type Order = {
   updatedAt: string;
   isNew: boolean;
   rawMessage: string;
+  sourceUrl?: string;
   analysis: AnalyzeResult;
   conversation?: ConversationTurn[];
   history?: OrderHistoryEvent[];
@@ -158,6 +194,31 @@ export type OptimizationRecord = {
   priority?: "高" | "中" | "低";
   optimized: boolean;
   updatedAt: string;
+};
+
+export type XianyuMvpVerificationRecord = {
+  id: string;
+  createdAt: string;
+  accepted: boolean;
+  pendingCount: number;
+  testSessionSummary?: string;
+  testSessionAccepted?: boolean;
+  testSessionPendingCount?: number;
+  testEvidenceItems?: Array<{ label: string; ok: boolean; detail: string }>;
+  latestMessageSummary: string;
+  latestCommandSummary: string;
+  latestConfigSummary?: string;
+  latestAutoSyncSummary?: string;
+  latestOutboundPluginSummary?: string;
+  acceptanceItems: Array<{ label: string; ok: boolean; detail: string }>;
+  diagnosticItems: Array<{ label: string; ok: boolean; detail: string }>;
+};
+
+export type XianyuMvpTestSession = {
+  id: string;
+  createdAt: string;
+  code: string;
+  buyerMessage: string;
 };
 
 export type EvaluationRun = {

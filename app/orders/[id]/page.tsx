@@ -9,8 +9,8 @@ import { businessTypeLabels, defaultKnowledgeRules, mergeDefaultTemplates, order
 import { buildAnalyzePayload, promptVersion } from "@/lib/analyzePayload";
 import { formatItemSummary } from "@/lib/format";
 import { createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
-import { getKnowledgeRules, getOrders, getSettings, getTemplates, getWebhookTokenForClient, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
-import type { AnalyzeApiResponse, AnalyzeResult, ConversationTurn, IntentLevel, Order, OrderHistoryEvent, OrderStatus } from "@/lib/types";
+import { getCustomerMessages, getKnowledgeRules, getOrders, getSettings, getTemplates, getWebhookTokenForClient, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveTemplates } from "@/lib/storage";
+import type { AnalyzeApiResponse, AnalyzeResult, ConversationTurn, IntentLevel, Order, OrderHistoryEvent, OrderStatus, OutboundReplyCommand, OutboundReplyStatus } from "@/lib/types";
 
 function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
@@ -45,6 +45,29 @@ function mergeOrders(localOrders: Order[], serverOrders: Order[]) {
   return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+const outboundStatusLabels: Record<OutboundReplyStatus, string> = {
+  pending: "待插件处理",
+  processing: "插件处理中",
+  filled: "已回填输入框",
+  sent: "已发送",
+  failed: "发送失败",
+  cancelled: "已取消",
+};
+
+function getOutboundStatusClass(status: OutboundReplyStatus) {
+  if (status === "sent" || status === "filled") return "bg-emerald-50 text-emerald-700";
+  if (status === "failed") return "bg-rose-50 text-rose-700";
+  if (status === "processing") return "bg-sky-50 text-sky-700";
+  if (status === "cancelled") return "bg-slate-100 text-slate-600";
+  return "bg-amber-50 text-amber-700";
+}
+
+function getOutboundModeLabel(mode: OutboundReplyCommand["mode"]) {
+  if (mode === "send") return "代点击发送";
+  if (mode === "fill") return "只回填";
+  return "按插件设置";
+}
+
 export default function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -52,7 +75,15 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const [followUpText, setFollowUpText] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [sendingToPlatform, setSendingToPlatform] = useState(false);
+  const [outboundCommands, setOutboundCommands] = useState<OutboundReplyCommand[]>([]);
   const order = useMemo(() => orders.find((item) => item.id === id), [orders, id]);
+  const orderOutboundCommands = useMemo(() => {
+    if (!order) return [];
+    return outboundCommands
+      .filter((command) => command.orderId === order.id || (command.customerFolder && command.customerFolder === (order.customerFolder || order.customerName)) || (command.sourceUrl && command.sourceUrl === order.sourceUrl))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [outboundCommands, order]);
 
   useEffect(() => {
     const normalized = getOrders().map(normalizeOrder);
@@ -63,6 +94,31 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       syncServerOrder();
     }
   }, [id]);
+
+  useEffect(() => {
+    refreshOutboundCommands(true);
+    const timer = window.setInterval(() => refreshOutboundCommands(true), 8000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!order) return;
+    const successful = orderOutboundCommands.filter((command) => command.status === "filled" || command.status === "sent");
+    if (!successful.length) return;
+    const nextCommand = successful.find((command) => !(order.history || []).some((event) => event.detail.includes(`任务ID：${command.id}`)));
+    if (!nextCommand) return;
+    const now = new Date().toISOString();
+    updateOrder(
+      {},
+      createOrderHistoryEvent(nextCommand.status === "sent" ? "reply_generated" : "follow_up", outboundStatusLabels[nextCommand.status], `任务ID：${nextCommand.id}\n回复：${nextCommand.reply}`, now),
+    );
+    const nextMessages = getCustomerMessages().map((messageItem) =>
+      messageItem.linkedOrderId === order.id || (order.customerFolder && messageItem.customerFolder === order.customerFolder)
+        ? { ...messageItem, status: "已回复" as const, isNew: false, updatedAt: now }
+        : messageItem,
+    );
+    saveCustomerMessages(nextMessages);
+  }, [orderOutboundCommands, order?.id]);
 
   async function syncServerOrder() {
     try {
@@ -79,6 +135,45 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       saveOrders(merged);
     } catch {
       // Keep local detail behavior if server orders are unavailable.
+    }
+  }
+
+  async function refreshOutboundCommands(silent = true) {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch(`/api/outbox?status=all&platform=${encodeURIComponent("闲鱼")}`, {
+        cache: "no-store",
+        headers: token ? { "x-webhook-token": token } : undefined,
+      });
+      const data = (await response.json()) as { commands?: OutboundReplyCommand[]; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "sync outbox failed");
+      setOutboundCommands(safeArray(data.commands));
+    } catch (error) {
+      if (!silent) {
+        const detail = error instanceof Error ? error.message : "同步发送状态失败";
+        setMessage(`同步闲鱼发送状态失败：${detail}`);
+      }
+    }
+  }
+
+  async function retryOutboundCommand(command: OutboundReplyCommand) {
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/outbox", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({ id: command.id, status: "pending" }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "retry failed");
+      await refreshOutboundCommands(true);
+      setMessage("已重新放回待发送队列，插件会再次处理。");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "重试失败";
+      setMessage(`重试闲鱼发送任务失败：${detail}`);
     }
   }
 
@@ -256,6 +351,54 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     setMessage("已复制推荐回复，并记入连续对话");
   }
 
+  async function sendReplyToPlatform() {
+    if (!order) return;
+    if (String(order.platform) !== "闲鱼") return setMessage("当前先支持发送回闲鱼，其他平台等平台适配器接入后再开放。");
+    if (!order.sourceUrl?.trim()) return setMessage("这条订单缺少原平台链接。请先从闲鱼插件同步消息进入工作台，或在客户画像里补上原平台链接。");
+    const reply = order.analysis?.reply || "";
+    if (!reply.trim()) return setMessage("暂无可发送的推荐回复，请先生成回复。");
+    setSendingToPlatform(true);
+    setMessage("");
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/outbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          customerFolder: order.customerFolder || order.customerName,
+          customerName: order.customerName,
+          platform: order.platform,
+          sourceUrl: order.sourceUrl,
+          reply,
+          mode: "plugin-default",
+        }),
+      });
+      const data = (await response.json()) as { command?: { id?: string }; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "创建发送任务失败");
+      const now = new Date().toISOString();
+      const latestAssistant = [...(order.conversation || [])].reverse().find((turn) => turn.role === "assistant");
+      updateOrder(
+        {
+          conversation: latestAssistant?.content === reply
+            ? order.conversation
+            : [...(order.conversation || []), { id: `turn_${Date.now()}_assistant_outbox`, role: "assistant", content: reply, createdAt: now }],
+        },
+        createOrderHistoryEvent("follow_up", "已创建闲鱼发送任务", `任务ID：${data.command?.id || "待插件同步"}\n回复：${reply}`, now),
+      );
+      await refreshOutboundCommands(true);
+      setMessage("已创建闲鱼发送任务。插件会按设置回填输入框或代点击发送。");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "发送任务创建失败";
+      setMessage(`发送回闲鱼失败：${detail}`);
+    } finally {
+      setSendingToPlatform(false);
+    }
+  }
+
   if (!order) {
     return (
       <div className="space-y-5">
@@ -293,6 +436,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
             <Field label="订单名称"><input className={inputClass} value={order.orderTitle || ""} onChange={(event) => updateOrder({ orderTitle: event.target.value })} /></Field>
             <Field label="客户昵称"><input className={inputClass} value={order.customerName} onChange={(event) => updateOrder({ customerName: event.target.value })} /></Field>
             <Field label="来源平台"><input className={inputClass} value={order.platform} onChange={(event) => updateOrder({ platform: event.target.value })} /></Field>
+            <Field label="原平台链接"><input className={inputClass} value={order.sourceUrl || ""} onChange={(event) => updateOrder({ sourceUrl: event.target.value })} placeholder="闲鱼聊天页链接" /></Field>
             <Field label="业务类型"><input className={inputClass} value={businessTypeLabels[order.businessType]} readOnly /></Field>
             <Field label="意向等级">
               <select className={inputClass} value={order.intentLevel} onChange={(event) => updateOrder({ intentLevel: event.target.value as IntentLevel })}>
@@ -328,7 +472,33 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
+            <button type="button" className={secondaryButtonClass} onClick={sendReplyToPlatform} disabled={sendingToPlatform || !order.analysis?.reply?.trim()}>{sendingToPlatform ? "创建发送任务中..." : "发送回闲鱼"}</button>
             <button type="button" className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
+          </div>
+          <div className="mt-4 rounded-2xl border border-white bg-white/90 p-4 text-sm shadow-sm ring-1 ring-slate-100">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-semibold text-slate-950">闲鱼发送状态</div>
+              <button type="button" className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => refreshOutboundCommands(false)}>刷新</button>
+            </div>
+            {orderOutboundCommands.length ? (
+              <div className="mt-3 space-y-2">
+                {orderOutboundCommands.slice(0, 3).map((command) => (
+                  <div key={command.id} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getOutboundStatusClass(command.status)}`}>{outboundStatusLabels[command.status]}</span>
+                      <span className="text-xs text-slate-500">{getOutboundModeLabel(command.mode)} · {formatDateTime(command.updatedAt)}</span>
+                    </div>
+                    <div className="mt-2 line-clamp-2 whitespace-pre-line text-slate-700">{command.reply}</div>
+                    {command.error ? <div className="mt-2 text-xs font-medium text-rose-600">{command.error}</div> : null}
+                    {command.status === "failed" || command.status === "cancelled" ? (
+                      <button type="button" className="mt-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => retryOutboundCommand(command)}>重试</button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">还没有发送回闲鱼的任务。</div>
+            )}
           </div>
         </section>
       </div>
