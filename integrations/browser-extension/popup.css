@@ -60,6 +60,32 @@ header strong {
   margin-bottom: 8px;
 }
 
+.daily-panel {
+  border-color: #b7e4f5;
+}
+
+.daily-stack {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.advanced-debug {
+  background: #f8fafc;
+}
+
+.advanced-debug > summary {
+  cursor: pointer;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.nested-panel {
+  margin-top: 10px;
+  box-shadow: none;
+}
+
 label {
   display: block;
   margin-bottom: 10px;

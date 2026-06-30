@@ -76,6 +76,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   const [analyzing, setAnalyzing] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [sendingToPlatform, setSendingToPlatform] = useState(false);
+  const [replyDraft, setReplyDraft] = useState("");
   const [outboundCommands, setOutboundCommands] = useState<OutboundReplyCommand[]>([]);
   const order = useMemo(() => orders.find((item) => item.id === id), [orders, id]);
   const orderOutboundCommands = useMemo(() => {
@@ -100,6 +101,10 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     const timer = window.setInterval(() => refreshOutboundCommands(true), 8000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setReplyDraft(order?.analysis?.reply || "");
+  }, [order?.id, order?.analysis?.reply]);
 
   useEffect(() => {
     if (!order) return;
@@ -170,7 +175,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
       const data = (await response.json()) as { error?: string };
       if (!response.ok || data.error) throw new Error(data.error || "retry failed");
       await refreshOutboundCommands(true);
-      setMessage("已重新放回待发送队列，插件会再次处理。");
+      setMessage("???????????????????????????\????????\????????????");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "重试失败";
       setMessage(`重试闲鱼发送任务失败：${detail}`);
@@ -322,6 +327,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         status: mapOrderStatus(analysis.orderStatus, analysis.missingInfo),
         intentLevel: inferIntentLevel(analysis.urgency, analysis.missingInfo),
       });
+      setReplyDraft(analysis.reply || "");
       setMessage("已重新生成候选回复。复制采用后才会写入连续对话。");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "请稍后重试";
@@ -332,7 +338,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   async function copyReply() {
-    const reply = order?.analysis?.reply || "";
+    const reply = replyDraft || "";
     if (!reply.trim()) return setMessage("暂无可复制内容");
     const copied = await copyText(reply);
     if (!copied || !order) return setMessage("复制失败，请手动复制");
@@ -355,7 +361,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
     if (!order) return;
     if (String(order.platform) !== "闲鱼") return setMessage("当前先支持发送回闲鱼，其他平台等平台适配器接入后再开放。");
     if (!order.sourceUrl?.trim()) return setMessage("这条订单缺少原平台链接。请先从闲鱼插件同步消息进入工作台，或在客户画像里补上原平台链接。");
-    const reply = order.analysis?.reply || "";
+    const reply = replyDraft || "";
     if (!reply.trim()) return setMessage("暂无可发送的推荐回复，请先生成回复。");
     setSendingToPlatform(true);
     setMessage("");
@@ -372,9 +378,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           customerFolder: order.customerFolder || order.customerName,
           customerName: order.customerName,
           platform: order.platform,
+          conversationId: order.conversationId || "",
           sourceUrl: order.sourceUrl,
+          itemTitle: order.itemSummary || "",
           reply,
-          mode: "plugin-default",
+          mode: "fill",
         }),
       });
       const data = (await response.json()) as { command?: { id?: string }; error?: string };
@@ -390,7 +398,7 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
         createOrderHistoryEvent("follow_up", "已创建闲鱼发送任务", `任务ID：${data.command?.id || "待插件同步"}\n回复：${reply}`, now),
       );
       await refreshOutboundCommands(true);
-      setMessage("已创建闲鱼发送任务。插件会按设置回填输入框或代点击发送。");
+      setMessage("Xianyu fill task created. Open the target customer chat, then use the extension to fill the input box and send manually.");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "发送任务创建失败";
       setMessage(`发送回闲鱼失败：${detail}`);
@@ -468,11 +476,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
           <InfoBlock title="商品/服务" content={itemSummary || "待确认"} />
           <div className="mb-4">
             <div className="mb-2 text-sm font-semibold text-slate-800">推荐回复草稿</div>
-            <div className="whitespace-pre-line rounded-2xl border border-emerald-100 bg-emerald-50/90 p-4 text-sm leading-7 text-emerald-950 shadow-sm">{order.analysis?.reply || "暂无"}</div>
+            <textarea className={`${textareaClass} min-h-36 bg-emerald-50/90 text-emerald-950`} value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} placeholder="AI 生成后可在这里编辑，确认后再复制或创建闲鱼发送任务。" />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!order.analysis?.reply?.trim()}>复制推荐回复</button>
-            <button type="button" className={secondaryButtonClass} onClick={sendReplyToPlatform} disabled={sendingToPlatform || !order.analysis?.reply?.trim()}>{sendingToPlatform ? "创建发送任务中..." : "发送回闲鱼"}</button>
+            <button type="button" className={secondaryButtonClass} onClick={copyReply} disabled={!replyDraft.trim()}>复制推荐回复</button>
+            <button type="button" className={secondaryButtonClass} onClick={sendReplyToPlatform} disabled={sendingToPlatform || !replyDraft.trim()}>{sendingToPlatform ? "创建发送任务中..." : "创建闲鱼发送任务"}</button>
             <button type="button" className={primaryButtonClass} onClick={regenerateReply} disabled={regenerating}>{regenerating ? "生成中..." : "重新生成推荐回复"}</button>
           </div>
           <div className="mt-4 rounded-2xl border border-white bg-white/90 p-4 text-sm shadow-sm ring-1 ring-slate-100">

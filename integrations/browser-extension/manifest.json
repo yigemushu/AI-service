@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.goofish.com/*", "https://*.goofish.com/*", "https://2.taobao.com/*", "https://*.2.taobao.com/*"],
-      "js": ["content-script.js"],
+      "js": ["adapters/xianyu.js", "content-script.js"],
       "run_at": "document_idle"
     }
   ],

@@ -44,6 +44,41 @@ export type ConversationTurn = {
   createdAt: string;
 };
 
+export type InboxMessage = {
+  id: string;
+  conversationId: string;
+  externalMessageId?: string;
+  role: "customer" | "assistant" | "seller_note";
+  content: string;
+  sourceUrl?: string;
+  createdAt: string;
+};
+
+export type InboxConversation = {
+  id: string;
+  conversationKey: string;
+  platform: string;
+  shopAlias?: string;
+  businessType: BusinessType;
+  customerName: string;
+  customerFolder: string;
+  itemTitle?: string;
+  sourceChannel: string;
+  sourceUrl?: string;
+  externalConversationId?: string;
+  platformThreadId?: string;
+  latestMessageText: string;
+  latestMessageAt: string;
+  status: InboxStatus;
+  unreadCount: number;
+  isNew: boolean;
+  linkedOrderId?: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: InboxMessage[];
+  legacyMessageId?: string;
+};
+
 export type OutboundReplyStatus = "pending" | "processing" | "filled" | "sent" | "failed" | "cancelled";
 
 export type OutboundReplyCommand = {
@@ -53,6 +88,10 @@ export type OutboundReplyCommand = {
   customerFolder: string;
   customerName: string;
   platform: SourcePlatform | string;
+  conversationId?: string;
+  itemTitle?: string;
+  platformThreadId?: string;
+  externalConversationId?: string;
   sourceUrl: string;
   reply: string;
   mode: "fill" | "send" | "plugin-default";
@@ -104,6 +143,10 @@ export type Order = {
   isNew: boolean;
   rawMessage: string;
   sourceUrl?: string;
+  conversationId?: string;
+  itemTitle?: string;
+  platformThreadId?: string;
+  externalConversationId?: string;
   analysis: AnalyzeResult;
   conversation?: ConversationTurn[];
   history?: OrderHistoryEvent[];

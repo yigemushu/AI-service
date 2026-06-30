@@ -10,160 +10,181 @@
     <main>
       <header>
         <span>AI 客服助手</span>
-        <strong>选中消息后生成回复草稿</strong>
+        <strong>日常模式</strong>
       </header>
 
-      <section class="panel">
-        <div class="section-title">插件连接码</div>
-        <label>
-          粘贴网站设置页复制的连接码
-          <textarea id="connectionCode" class="compact" placeholder="aics_..."></textarea>
+      <section class="panel daily-panel">
+        <div class="section-title">连接与监听</div>
+        <div id="dailyConnection" class="status-card muted">连接状态：检查中...</div>
+        <div id="dailyPage" class="status-card muted">当前页面：检查中...</div>
+        <label class="checkbox-row">
+          <input id="dailyAutoSyncEnabled" type="checkbox" />
+          <span>自动监听闲鱼新消息</span>
         </label>
-        <button id="importConnectionCode" type="button" class="primary">导入配置并测试连接</button>
-        <p class="hint">连接码包含 Webhook Token，请只使用自己网站设置页生成的连接码。</p>
+        <div id="syncLinkStatusPanel" class="status-card muted">同步链路：等待检测...</div>
+        <div id="dailyRecent" class="status-card muted">最近同步：暂无</div>
+        <label>
+          插件连接码
+          <textarea id="connectionCode" class="compact" placeholder="从网站设置页复制 aics_... 连接码"></textarea>
+        </label>
+        <button id="importConnectionCode" type="button" class="primary">导入连接码并测试</button>
+        <div class="button-row">
+          <button id="dailyGenerateReply" type="button" class="primary">生成回复</button>
+          <button id="dailySyncLatestPageMessage" type="button">同步当前聊天最新消息</button>
+          <button id="dailyFillPendingReply" type="button">填入闲鱼输入框</button>
+          <button id="dailyCopyReply" type="button">复制回复</button>
+          <button id="dailySaveOrder" type="button">保存订单</button>
+          <button id="dailyOpenMessages" type="button">查看消息中心</button>
+        </div>
+        <p class="hint">只做草稿和保存，不会自动给客户发送消息。</p>
       </section>
 
-      <details class="panel advanced-config">
-        <summary>高级手动配置</summary>
-        <label>
-          网站地址
-          <input id="baseUrl" placeholder="http://localhost:3000" />
-        </label>
+      <details class="panel advanced-debug">
+        <summary>高级调试和手动操作</summary>
 
-        <label>
-          Webhook Token
-          <input id="token" placeholder="填写网站设置页里的 Token" type="text" />
-        </label>
-
-        <label>
-          我的昵称
-          <input id="myNickname" placeholder="可选，用于排除自己的名字" />
-        </label>
-
-        <div class="grid">
+        <details class="panel advanced-config">
+          <summary>手动配置</summary>
           <label>
-            平台
-            <select id="platform">
-              <option value="闲鱼">闲鱼</option>
-              <option value="微信">微信</option>
-              <option value="淘宝">淘宝</option>
-              <option value="拼多多">拼多多</option>
-              <option value="Facebook">Facebook</option>
-              <option value="eBay">eBay</option>
-              <option value="其他">其他</option>
+            网站地址
+            <input id="baseUrl" placeholder="http://localhost:3000" />
+          </label>
+          <label>
+            Webhook Token
+            <input id="token" placeholder="填写网站设置页里的 Token" type="text" />
+          </label>
+          <label>
+            我的昵称
+            <input id="myNickname" placeholder="可选，用于排除自己的消息" />
+          </label>
+          <label>
+            店铺/账号别名
+            <input id="shopAlias" placeholder="例如：账号A，不填则 default-shop" />
+          </label>
+          <div class="grid">
+            <label>
+              平台
+              <select id="platform">
+                <option value="闲鱼">闲鱼</option>
+                <option value="微信">微信</option>
+                <option value="淘宝">淘宝</option>
+                <option value="拼多多">拼多多</option>
+                <option value="Facebook">Facebook</option>
+                <option value="eBay">eBay</option>
+                <option value="其他">其他</option>
+              </select>
+            </label>
+            <label>
+              业务类型
+              <select id="businessType">
+                <option value="xianyu">闲鱼卖货</option>
+                <option value="virtual">虚拟服务</option>
+                <option value="sam">山姆代下单</option>
+                <option value="local">本地服务</option>
+                <option value="trade">外贸询盘</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid">
+            <label>
+              客户昵称
+              <input id="customerName" placeholder="可不填" />
+            </label>
+            <label>
+              客户文件夹
+              <input id="customerFolder" placeholder="不填则用客户昵称" />
+            </label>
+          </div>
+          <label>
+            默认动作
+            <select id="actionMode">
+              <option value="analyze">直接生成回复</option>
+              <option value="inbox">发送到消息中心</option>
             </select>
           </label>
+          <div class="button-row">
+            <button id="saveConfig" type="button">保存配置</button>
+            <button id="testConnection" type="button">测试连接</button>
+          </div>
+        </details>
 
+        <section class="panel nested-panel">
+          <div class="section-title">自动同步</div>
+          <label class="checkbox-row">
+            <input id="autoSyncEnabled" type="checkbox" />
+            <span>自动同步闲鱼新消息到消息中心</span>
+          </label>
+          <label class="checkbox-row">
+            <input id="debugMode" type="checkbox" />
+            <span>调试模式：仅在本地显示提取字段</span>
+          </label>
+          <label class="checkbox-row">
+            <input id="outboundSyncEnabled" type="checkbox" />
+            <span>允许工作台把确认后的回复同步回闲鱼输入框</span>
+          </label>
           <label>
-            业务类型
-            <select id="businessType">
-              <option value="xianyu">闲鱼卖货</option>
-              <option value="virtual">虚拟服务</option>
-              <option value="sam">山姆代下单</option>
-              <option value="local">本地服务</option>
-              <option value="trade">外贸询盘</option>
+            同步回闲鱼后的动作
+            <select id="outboundMode">
+              <option value="fill">只填入输入框，我再确认发送</option>
             </select>
           </label>
-        </div>
+          <div class="button-row">
+            <button id="diagnosePage" type="button">检查当前页面</button>
+            <button id="copyDiagnostics" type="button" disabled>复制诊断结果</button>
+            <button id="syncLatestPageMessage" type="button">测试同步当前页最新消息</button>
+          </div>
+          <div class="status-grid" aria-live="polite">
+            <div id="pageStatusPanel" class="status-card muted">页面识别：检查中...</div>
+            <div id="autoSyncStatusPanel" class="status-card muted">自动同步：暂无记录</div>
+            <div id="outboundStatusPanel" class="status-card muted">回闲鱼：暂无记录</div>
+          </div>
+          <div id="latestFieldsPanel" class="diagnostics muted">最近捕获字段会显示在这里。</div>
+          <div id="diagnosticsPanel" class="diagnostics hidden"></div>
+        </section>
 
-        <div class="grid">
+        <section class="panel nested-panel">
+          <div class="section-title">手动消息</div>
           <label>
-            客户昵称
-            <input id="customerName" placeholder="可不填" />
+            选中或输入的客户消息
+            <textarea id="rawMessage" placeholder="先在聊天网页选中客户消息，也可以手动粘贴"></textarea>
+          </label>
+          <button id="capture" type="button">读取选中文本</button>
+          <div class="button-row">
+            <button id="send" type="button">发送到消息中心</button>
+            <button id="analyze" type="button" class="primary">生成回复</button>
+          </div>
+        </section>
+
+        <section id="resultPanel" class="panel nested-panel result hidden">
+          <div class="section-title">AI 回复草稿</div>
+          <label>
+            客户诉求
+            <div id="summary" class="box muted"></div>
           </label>
           <label>
-            客户文件夹
-            <input id="customerFolder" placeholder="不填则用客户昵称" />
+            缺失信息
+            <ul id="missingInfo" class="box list"></ul>
           </label>
-        </div>
+          <label>
+            风险点
+            <ul id="riskFlags" class="box list"></ul>
+          </label>
+          <label>
+            推荐回复
+            <textarea id="reply" readonly></textarea>
+          </label>
+          <div class="button-row">
+            <button id="copyReply" type="button" class="primary">复制回复</button>
+            <button id="saveOrder" type="button">保存订单</button>
+          </div>
+          <button id="openMessages" type="button">打开消息中心</button>
+        </section>
 
-        <label>
-          默认动作
-          <select id="actionMode">
-            <option value="analyze">直接生成回复</option>
-            <option value="inbox">发送到消息中心</option>
-          </select>
-        </label>
-
-        <div class="button-row">
-          <button id="saveConfig" type="button">保存配置</button>
-          <button id="testConnection" type="button">测试连接</button>
-        </div>
+        <section class="panel nested-panel">
+          <div class="section-title">实机验收</div>
+          <p class="hint">测试完整闭环时，打开验证页查看测试码、下一步提示和验收证据。</p>
+          <button id="openXianyuMvp" type="button">打开闲鱼闭环验证</button>
+        </section>
       </details>
-
-      <section class="panel">
-        <div class="section-title">自动同步</div>
-        <label class="checkbox-row">
-          <input id="autoSyncEnabled" type="checkbox" />
-          <span>在闲鱼聊天页自动同步新买家消息到消息中心</span>
-        </label>
-        <label class="checkbox-row">
-          <input id="outboundSyncEnabled" type="checkbox" />
-          <span>允许工作台把确认后的回复同步回闲鱼</span>
-        </label>
-        <label>
-          同步回闲鱼后的动作
-          <select id="outboundMode">
-            <option value="fill">只填入输入框，我再确认发送</option>
-            <option value="send">直接代我点击发送</option>
-          </select>
-        </label>
-        <p class="hint">开启后需要保持闲鱼聊天页打开并已登录。默认只把回复填入输入框；选择代发模式后，才会点击发送。</p>
-        <div class="button-row">
-          <button id="diagnosePage" type="button">诊断当前闲鱼页面</button>
-          <button id="copyDiagnostics" type="button" disabled>复制诊断结果</button>
-          <button id="syncLatestPageMessage" type="button">同步当前页最新消息</button>
-        </div>
-        <div class="status-grid" aria-live="polite">
-          <div id="autoSyncStatusPanel" class="status-card muted">自动同步：暂无记录</div>
-          <div id="outboundStatusPanel" class="status-card muted">回闲鱼：暂无记录</div>
-        </div>
-        <div id="diagnosticsPanel" class="diagnostics hidden"></div>
-      </section>
-
-      <section class="panel">
-        <div class="section-title">客户消息</div>
-        <label>
-          选中或输入的客户消息
-          <textarea id="rawMessage" placeholder="先在聊天网页选中客户消息，也可以手动粘贴"></textarea>
-        </label>
-        <button id="capture" type="button">读取网页选中文本</button>
-        <div class="button-row">
-          <button id="send" type="button">发送到消息中心</button>
-          <button id="analyze" type="button" class="primary">直接生成回复</button>
-        </div>
-      </section>
-
-      <section id="resultPanel" class="panel result hidden">
-        <div class="section-title">AI 回复草稿</div>
-        <label>
-          客户诉求
-          <div id="summary" class="box muted"></div>
-        </label>
-        <label>
-          缺失信息
-          <ul id="missingInfo" class="box list"></ul>
-        </label>
-        <label>
-          风险点
-          <ul id="riskFlags" class="box list"></ul>
-        </label>
-        <label>
-          推荐回复
-          <textarea id="reply" readonly></textarea>
-        </label>
-        <div class="button-row">
-          <button id="copyReply" type="button" class="primary">复制回复</button>
-          <button id="saveOrder" type="button">保存订单</button>
-        </div>
-        <button id="openMessages" type="button">打开消息中心 / 保存订单</button>
-      </section>
-
-      <section class="panel">
-        <div class="section-title">实机验收</div>
-        <p class="hint">测试闲鱼完整闭环时，打开验证页查看测试码、下一步提示和验收证据。</p>
-        <button id="openXianyuMvp" type="button">打开闲鱼闭环验证</button>
-      </section>
 
       <p id="status" aria-live="polite"></p>
     </main>

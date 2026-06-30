@@ -16,6 +16,34 @@ type CheckState = {
   message: string;
 };
 
+type PluginHeartbeatView = {
+  online?: boolean;
+  status?: {
+    siteOrigin?: string;
+    platform?: string;
+    shopAlias?: string;
+    pageStatus?: "xianyu-detected" | "not-detected";
+    autoSyncEnabled?: boolean;
+    lastSyncAt?: string;
+    lastCapturedSummary?: string;
+    extensionVersion?: string;
+    updatedAt?: string;
+  } | null;
+};
+
+type InboxLogEntry = {
+  id: string;
+  receivedAt: string;
+  platform: string;
+  customerName: string;
+  messageSummary: string;
+  conversationId: string;
+  duplicated: boolean;
+  status: "success" | "failed";
+  httpStatus: number;
+  error?: string;
+};
+
 const outboundStatusLabels: Record<OutboundReplyStatus, string> = {
   pending: "待插件处理",
   processing: "插件处理中",
@@ -113,6 +141,8 @@ export default function XianyuMvpPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [outbox, setOutbox] = useState<OutboundReplyCommand[]>([]);
   const [pluginStatuses, setPluginStatuses] = useState<BrowserPluginStatus[]>([]);
+  const [inboxLogs, setInboxLogs] = useState<InboxLogEntry[]>([]);
+  const [pluginHeartbeat, setPluginHeartbeat] = useState<PluginHeartbeatView>({});
   const [loading, setLoading] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -125,21 +155,38 @@ export default function XianyuMvpPage() {
     setLoading(true);
     try {
       const token = await getWebhookTokenForClient();
+      const [health, heartbeatData] = await Promise.all([
+        fetch("/api/health", { cache: "no-store" }).then((response) => response.ok).catch(() => false),
+        fetch("/api/plugin/status", { cache: "no-store" }).then((response) => response.json()).catch(() => ({})),
+      ]);
+      setPluginHeartbeat(heartbeatData as PluginHeartbeatView);
       if (!token) {
-        setCheckState({ health: "warn", tokenReady: false, message: "还没有读取到 Webhook Token，请先去设置页生成插件连接码。" });
+        setMessages([]);
+        setOrders([]);
+        setOutbox([]);
+        setPluginStatuses([]);
+        setCheckState({
+          health: health ? "warn" : "error",
+          tokenReady: false,
+          message: heartbeatData?.online
+            ? "网站已收到插件心跳，但当前页面还没有读到 Webhook Token；消息和订单统计暂时不会刷新。"
+            : "还没有读取到 Webhook Token，请先去设置页生成插件连接码。",
+        });
+        setLastRefreshAt(new Date().toLocaleString());
         return;
       }
-      const [health, inboxData, orderData, outboxData, pluginStatusData] = await Promise.all([
-        fetch("/api/health", { cache: "no-store" }).then((response) => response.ok),
+      const [inboxData, orderData, outboxData, pluginStatusData, inboxLogData] = await Promise.all([
         readJson<{ messages?: CustomerMessage[] }>("/api/inbox", token),
         readJson<{ orders?: Order[] }>("/api/orders", token),
         readJson<{ commands?: OutboundReplyCommand[] }>("/api/outbox?status=all&platform=%E9%97%B2%E9%B1%BC", token),
         readJson<{ statuses?: BrowserPluginStatus[] }>("/api/plugin-status?platform=%E9%97%B2%E9%B1%BC", token),
+        readJson<{ logs?: InboxLogEntry[] }>("/api/inbox/logs", token),
       ]);
       setMessages(Array.isArray(inboxData.messages) ? inboxData.messages : []);
       setOrders(Array.isArray(orderData.orders) ? orderData.orders : []);
       setOutbox(Array.isArray(outboxData.commands) ? outboxData.commands : []);
       setPluginStatuses(Array.isArray(pluginStatusData.statuses) ? pluginStatusData.statuses : []);
+      setInboxLogs(Array.isArray(inboxLogData.logs) ? inboxLogData.logs : []);
       setCheckState({
         health: health ? "ok" : "warn",
         tokenReady: true,
@@ -219,6 +266,9 @@ export default function XianyuMvpPage() {
   const accepted = isXianyuMvpAccepted(acceptanceItems);
   const latestMessage = xianyuMessages[0];
   const latestCommand = latestCommands[0];
+  const heartbeatStatus = pluginHeartbeat.status || null;
+  const heartbeatOnline = Boolean(pluginHeartbeat.online);
+  const heartbeatPageDetected = heartbeatStatus?.pageStatus === "xianyu-detected";
   const latestAutoSyncSummary = pluginStatusSummary(latestAutoSyncStatus, "无自动同步状态");
   const latestOutboundPluginSummary = pluginStatusSummary(latestOutboundPluginStatus, "无回闲鱼状态");
   const latestConfigSummary = pluginStatusSummary(latestConfigStatus, "无插件配置状态");
@@ -520,6 +570,47 @@ export default function XianyuMvpPage() {
     window.setTimeout(() => setCopyMessage(""), 1800);
   }
 
+  async function clearTestData() {
+    const confirmed = window.confirm("确认清空本机和服务端测试消息、订单、会话、发送任务和验收记录吗？插件连接配置会保留。");
+    if (!confirmed) return;
+    try {
+      const token = await getWebhookTokenForClient();
+      const removablePrefixes = ["ai-service."];
+      const keepKeys = new Set(["ai-service.settings", "ai-service.demo-auth"]);
+      for (const key of Object.keys(window.localStorage)) {
+        if (removablePrefixes.some((prefix) => key.startsWith(prefix)) && !keepKeys.has(key)) {
+          window.localStorage.removeItem(key);
+        }
+      }
+      window.dispatchEvent(new Event("orders-updated"));
+      window.dispatchEvent(new Event("customer-messages-updated"));
+      const response = await fetch("/api/test-data/clear", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({}),
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+      setMessages([]);
+      setOrders([]);
+      setOutbox([]);
+      setPluginStatuses([]);
+      setPluginHeartbeat({});
+      setRecords([]);
+      const nextSession = createTestSession();
+      setTestSession(nextSession);
+      saveXianyuTestSession(nextSession);
+      setCopyMessage("测试数据已清空，插件连接配置已保留");
+      await refresh();
+    } catch (error) {
+      setCopyMessage(`清空测试数据失败：${error instanceof Error ? error.message : "请稍后重试"}`);
+    }
+    window.setTimeout(() => setCopyMessage(""), 2500);
+  }
+
   async function retryOutboundCommand(command: OutboundReplyCommand) {
     try {
       const token = await getWebhookTokenForClient();
@@ -543,6 +634,54 @@ export default function XianyuMvpPage() {
     window.setTimeout(() => setCopyMessage(""), 1800);
   }
 
+  const friendlyConnectionMessage = checkState.health === "error"
+    ? "网站连接失败：插件或网站服务暂时没有连通。请先确认插件连接码是否导入成功，再刷新状态。"
+    : checkState.message;
+  const beginnerCards = [
+    {
+      title: "插件连接",
+      status: heartbeatOnline ? "已连接" : heartbeatStatus ? "已离线" : "未连接",
+      detail: heartbeatOnline ? "网站已收到插件心跳。" : heartbeatStatus ? "超过 60 秒没有收到插件心跳，请打开插件或刷新状态。" : "尚未收到插件心跳。请打开插件并点击测试连接。",
+      meta: heartbeatStatus?.updatedAt ? `最近心跳：${timeLabel(heartbeatStatus.updatedAt)}` : "当前网站：使用本页设置页生成的连接码",
+      action: heartbeatOnline ? { label: "下一步：打开闲鱼聊天页", href: "" } : { label: "去设置页复制插件连接码", href: "/settings" },
+      tone: heartbeatOnline ? "ok" : heartbeatStatus ? "error" : "warn",
+    },
+    {
+      title: "闲鱼页面识别",
+      status: heartbeatPageDetected ? "已识别闲鱼" : "未识别",
+      detail: heartbeatPageDetected ? "插件当前识别到闲鱼聊天页。" : "打开真实闲鱼聊天页后，在插件里点“检查当前页面”。",
+      meta: `自动同步：${heartbeatStatus?.autoSyncEnabled ? "开" : "关或待确认"}`,
+      action: { label: "刷新状态", href: "" },
+      tone: heartbeatPageDetected ? "ok" : "warn",
+    },
+    {
+      title: "消息同步",
+      status: latestMessage ? "已有客户消息" : "等待消息",
+      detail: latestMessage ? `${latestMessage.customerName || latestMessage.customerFolder || "客户"}：${(latestMessage.rawMessage || "").slice(0, 42)}` : "等待客户在闲鱼发来消息，插件会自动同步到消息中心。",
+      meta: heartbeatStatus?.lastCapturedSummary ? `最近插件捕获：${heartbeatStatus.lastCapturedSummary}` : latestMessage?.sourceUrl ? "已保留原闲鱼页面链接" : "同一会话聚合会在消息中心查看",
+      action: { label: "打开消息中心查看", href: "/messages" },
+      tone: latestMessage ? "ok" : "warn",
+    },
+    {
+      title: "回复与订单",
+      status: xianyuOrders.length > 0 ? "订单已保存" : latestCommand ? "回复已生成" : "未生成回复",
+      detail: xianyuOrders.length > 0 ? "客户订单已保存，可以进入订单页查看。" : latestCommand ? "已有回复任务，下一步确认订单是否保存。" : "在消息中心打开会话，生成 AI 回复并保存订单。",
+      meta: `订单数：${xianyuOrders.length}`,
+      action: { label: "打开客户订单", href: "/orders" },
+      tone: xianyuOrders.length > 0 ? "ok" : latestCommand ? "warn" : "idle",
+    },
+  ];
+  const beginnerSteps = [
+    { label: "导入插件连接码", done: checkState.tokenReady && Boolean(latestConfigStatus?.ok), href: "/settings", actionLabel: "复制连接码" },
+    { label: "打开闲鱼聊天页", done: diagnosticReady, href: "", actionLabel: "在插件里检查当前页面" },
+    { label: "等待客户消息同步", done: Boolean(latestMessage), href: "/messages", actionLabel: "查看消息中心" },
+    { label: "在消息中心生成回复", done: Boolean(latestCommand), href: trackedMessageHref, actionLabel: "打开会话" },
+    { label: "保存订单", done: xianyuOrders.length > 0, href: "/orders", actionLabel: "查看订单" },
+  ].map((step, index, all) => ({
+    ...step,
+    current: !step.done && all.slice(0, index).every((item) => item.done),
+  }));
+
   return (
     <div className="space-y-5">
       <header className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -550,36 +689,37 @@ export default function XianyuMvpPage() {
           <div>
             <div className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">Xianyu MVP</div>
             <h1 className="mt-3 text-2xl font-semibold text-slate-950">闲鱼闭环验证</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">用真实闲鱼聊天页测试时，在这里集中看消息入站、回复任务、回填结果和客户/订单沉淀。</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">按 5 步完成最小验证：连接插件、识别闲鱼页、同步消息、生成回复、保存订单。</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Link className={secondaryButtonClass} href="/settings">插件连接码</Link>
             <Link className={secondaryButtonClass} href="/messages">消息中心</Link>
-            <button type="button" className={secondaryButtonClass} onClick={saveVerificationRecord}>保存验收记录</button>
-            <button type="button" className={secondaryButtonClass} onClick={copyVerificationSummary}>复制验收摘要</button>
             <button type="button" className={primaryButtonClass} onClick={refresh} disabled={loading}>{loading ? "刷新中..." : "刷新状态"}</button>
           </div>
         </div>
-        <label className="mt-3 flex w-fit items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
-          <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
-          <span>{autoRefresh ? "自动刷新已开启，每 8 秒更新" : "自动刷新已关闭"}</span>
-        </label>
         {copyMessage ? <div className="mt-3 text-sm font-medium text-emerald-700">{copyMessage}</div> : null}
       </header>
 
       <div className={`rounded-md border px-4 py-3 text-sm ${statusTone(checkState.health)}`}>
         <div className="font-semibold">{checkState.tokenReady ? "连接准备就绪" : "连接待确认"}</div>
-        <div className="mt-1">{checkState.message}</div>
+        <div className="mt-1">{friendlyConnectionMessage}</div>
         {lastRefreshAt ? <div className="mt-1 text-xs opacity-75">最近刷新：{lastRefreshAt}</div> : null}
       </div>
 
-      <div className={`rounded-md border px-4 py-3 text-sm ${strictAccepted ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-        <div className="font-semibold">{strictAccepted ? "本次真实闲鱼闭环已通过" : "本次真实闲鱼闭环还没通过"}</div>
-        <div className="mt-1 text-xs opacity-80">
-          {strictAccepted
-            ? "总体验收门槛和本次测试码证据都已满足，可以保存验收记录。"
-            : `总体验收还有 ${acceptanceItems.filter((item) => !item.ok).length} 项待处理，本次测试码还有 ${testSessionPendingCount} 项待处理。`}
-        </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {beginnerCards.map((card) => (
+          <div key={card.title} className={`rounded-md border p-4 text-sm ${card.tone === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : card.tone === "error" ? "border-rose-200 bg-rose-50 text-rose-900" : card.tone === "warn" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-white text-slate-700"}`}>
+            <div className="text-xs font-semibold opacity-75">{card.title}</div>
+            <div className="mt-2 text-lg font-semibold">{card.status}</div>
+            <div className="mt-2 text-xs leading-5 opacity-85">{card.detail}</div>
+            <div className="mt-2 text-xs opacity-70">{card.meta}</div>
+            {card.action.href ? (
+              <Link className="mt-3 inline-flex rounded-md border border-white/80 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50" href={card.action.href}>
+                {card.action.label}
+              </Link>
+            ) : null}
+          </div>
+        ))}
       </div>
 
       <div className="rounded-md border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
@@ -593,15 +733,14 @@ export default function XianyuMvpPage() {
         ) : null}
       </div>
 
-      <Section title="现场跑测步骤">
+      <Section title="5 步完成验证">
         <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm text-slate-600">
-            从连接插件到保存通过记录，按当前状态自动标出下一步。
+            新用户只按这条路径走，完成后就能判断闭环是否跑通。
           </div>
-          <button type="button" className={secondaryButtonClass} onClick={copyLiveRunbook}>复制跑测步骤</button>
         </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {liveRunSteps.map((step, index) => (
+        <div className="grid gap-3 md:grid-cols-5">
+          {beginnerSteps.map((step, index) => (
             <div
               key={step.label}
               className={`rounded-md border p-3 text-sm ${step.done ? "border-emerald-200 bg-emerald-50 text-emerald-900" : step.current ? "border-sky-200 bg-sky-50 text-sky-950" : "border-slate-200 bg-white text-slate-700"}`}
@@ -611,8 +750,10 @@ export default function XianyuMvpPage() {
                   {index + 1}
                 </span>
                 <div>
-                  <div className="font-semibold">{step.done ? "已完成" : step.current ? "现在处理" : "待处理"} · {step.label}</div>
-                  <div className="mt-1 text-xs leading-5 opacity-80">{step.detail}</div>
+                  <div className="font-semibold">{step.done ? "已完成" : step.current ? "现在做" : "待处理"} · {step.label}</div>
+                  <div className="mt-1 text-xs leading-5 opacity-80">
+                    {step.current ? "这是当前最重要的一步。" : step.done ? "已通过。" : "完成前面的步骤后再处理。"}
+                  </div>
                   {!step.done && step.current && step.href && step.actionLabel ? (
                     <Link className="mt-2 inline-flex rounded-md border border-white/80 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" href={step.href}>
                       {step.actionLabel}
@@ -624,6 +765,20 @@ export default function XianyuMvpPage() {
           ))}
         </div>
       </Section>
+
+      <details className="rounded-md border border-slate-200 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-800">高级调试、验收记录和完整证据</summary>
+        <div className="mt-4 space-y-5">
+          <label className="flex w-fit items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+            <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
+            <span>{autoRefresh ? "自动刷新已开启，每 8 秒更新" : "自动刷新已关闭"}</span>
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button type="button" className={secondaryButtonClass} onClick={saveVerificationRecord}>保存验收记录</button>
+            <button type="button" className={secondaryButtonClass} onClick={copyVerificationSummary}>复制验收摘要</button>
+            <button type="button" className={secondaryButtonClass} onClick={copyLiveRunbook}>复制跑测步骤</button>
+            <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-md border border-rose-200 bg-white px-4 py-2 text-sm font-semibold text-rose-600 shadow-sm transition hover:bg-rose-50" onClick={clearTestData}>清空测试数据</button>
+          </div>
 
       <div className={`rounded-md border px-4 py-3 text-sm ${noReturnToXianyuReady ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
         <div className="font-semibold">{noReturnToXianyuReady ? "统一操作模式：已开启代点击发送" : "统一操作模式：还可能需要回闲鱼确认发送"}</div>
@@ -690,6 +845,32 @@ export default function XianyuMvpPage() {
             </div>
           ))}
         </div>
+      </Section>
+
+      <Section title="最近 /api/inbox 入站日志">
+        {inboxLogs.length ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {inboxLogs.slice(0, 6).map((log) => (
+              <div key={log.id} className={`rounded-md border p-4 text-sm ${log.status === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-rose-200 bg-rose-50 text-rose-900"}`}>
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="font-semibold">{log.status === "success" ? "已收到同步请求" : "同步请求失败"}</div>
+                  <div className="text-xs opacity-75">{timeLabel(log.receivedAt)}</div>
+                </div>
+                <div className="mt-2 text-xs leading-5">
+                  <div>HTTP {log.httpStatus}{log.duplicated ? " · duplicated=true" : ""}</div>
+                  <div>平台：{log.platform || "未识别"} · 客户：{log.customerName || "未识别"}</div>
+                  <div>摘要：{log.messageSummary || "无内容"}</div>
+                  {log.conversationId ? <div>conversationId：{log.conversationId}</div> : null}
+                  {log.error ? <div>错误：{log.error}</div> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            尚未收到插件同步请求。请先在插件里点击“测试同步当前页最新消息”，如果这里仍为空，问题在插件请求没有到达网站。
+          </div>
+        )}
       </Section>
 
       <div className="grid gap-3 md:grid-cols-4">
@@ -860,6 +1041,8 @@ export default function XianyuMvpPage() {
           </div>
         )}
       </Section>
+        </div>
+      </details>
     </div>
   );
 }

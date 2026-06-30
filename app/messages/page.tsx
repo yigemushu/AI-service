@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Field } from "@/components/Field";
 import { Section } from "@/components/Section";
@@ -10,7 +10,7 @@ import { buildAnalyzePayload, isPhysicalGoodsText, isVirtualServiceText } from "
 import { formatItemSummary } from "@/lib/format";
 import { buildOrderTitle, createOrderHistoryEvent, inferIntentLevel, mapOrderStatus, normalizeOrder } from "@/lib/orderUtils";
 import { createId, getCustomerMessages, getKnowledgeRules, getOrders, getRecognitionExperiences, getSettings, getTemplates, getWebhookTokenForClient, saveCustomerMessages, saveKnowledgeRules, saveOrders, saveRecognitionExperiences, saveTemplates } from "@/lib/storage";
-import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxStatus, Order, OutboundReplyCommand, OutboundReplyStatus, RecognitionExperience, SourcePlatform } from "@/lib/types";
+import type { AnalyzeApiResponse, AnalyzeResult, BusinessType, ConversationTurn, CustomerMessage, InboxConversation, InboxStatus, Order, OutboundReplyCommand, OutboundReplyStatus, RecognitionExperience, SourcePlatform } from "@/lib/types";
 
 type MainColumn = "highIntent" | "sam" | "xianyu" | "local" | "trade" | "closed" | "archived";
 
@@ -570,9 +570,22 @@ function buildOrderFromFolder(group: CustomerFolderGroup, existingOrder: Order |
 }
 
 export default function MessagesPage() {
+  return (
+    <Suspense fallback={<div className="rounded-md border border-amber-100 bg-white p-6 text-sm text-slate-500">消息中心加载中...</div>}>
+      <MessagesPageContent />
+    </Suspense>
+  );
+}
+
+function MessagesPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState<CustomerMessage[]>(() => getCustomerMessages());
+  const [conversations, setConversations] = useState<InboxConversation[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState("");
+  const [conversationDraft, setConversationDraft] = useState("");
+  const [conversationAnalysis, setConversationAnalysis] = useState<AnalyzeResult | null>(null);
+  const [conversationProcessing, setConversationProcessing] = useState(false);
   const [orders, setOrders] = useState<Order[]>(() => getOrders().map(normalizeOrder));
   const [recognitionExperiences, setRecognitionExperiences] = useState<RecognitionExperience[]>(() => getRecognitionExperiences());
   const [activeColumn, setActiveColumn] = useState<MainColumn>("highIntent");
@@ -611,6 +624,8 @@ export default function MessagesPage() {
       .filter((command) => command.customerFolder === selectedGroup.folder || command.messageId === selectedGroup.latest.id || (selectedOrder?.id && command.orderId === selectedOrder.id))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, [outboundCommands, selectedGroup, selectedOrder?.id]);
+  const selectedConversation = useMemo(() => conversations.find((conversation) => conversation.id === selectedConversationId) || conversations[0], [conversations, selectedConversationId]);
+  const conversationUnreadCount = useMemo(() => conversations.reduce((sum, conversation) => sum + (conversation.unreadCount || 0), 0), [conversations]);
 
   useEffect(() => {
     const messageId = searchParams.get("messageId") || "";
@@ -647,6 +662,11 @@ export default function MessagesPage() {
   function persistMessages(next: CustomerMessage[]) {
     setMessages(next);
     saveCustomerMessages(next);
+  }
+
+  function persistConversations(next: InboxConversation[]) {
+    setConversations(next.sort((a, b) => (b.updatedAt || b.latestMessageAt).localeCompare(a.updatedAt || a.latestMessageAt)));
+    window.dispatchEvent(new Event("customer-messages-updated"));
   }
 
   function persistOrders(next: Order[]) {
@@ -796,8 +816,13 @@ export default function MessagesPage() {
         cache: "no-store",
         headers: token ? { "x-webhook-token": token } : undefined,
       });
-      const data = (await response.json()) as { messages?: CustomerMessage[]; error?: string };
+      const data = (await response.json()) as { conversations?: InboxConversation[]; messages?: CustomerMessage[]; error?: string };
       if (!response.ok || data.error) throw new Error(data.error || "sync failed");
+      const incomingConversations = safeArray(data.conversations);
+      if (incomingConversations.length) {
+        persistConversations(incomingConversations);
+        setSelectedConversationId((current) => current || incomingConversations[0]?.id || "");
+      }
       const incoming = safeArray(data.messages);
       const merged = mergeCustomerMessages(messages, incoming, orders);
       persistMessages(merged.messages);
@@ -806,7 +831,7 @@ export default function MessagesPage() {
         setActiveColumn(columnForBusinessType(touched.businessType));
         setSelectedFolder(getFolderName(touched));
       }
-      setNotice(incoming.length ? `已同步 ${incoming.length} 条外部消息，同一联系人会合并到同一个客户文件夹` : "外部收件箱暂无消息");
+      setNotice(incomingConversations.length ? `已同步 ${incomingConversations.length} 个会话，旧消息 ${incoming.length} 条` : incoming.length ? `已同步 ${incoming.length} 条外部消息，同一联系人会合并到同一个客户文件夹` : "外部收件箱暂无消息");
     } catch (error) {
       const message = error instanceof Error ? error.message : "同步失败";
       setNotice(`同步外部消息失败：${message}。请确认服务器 INBOX_WEBHOOK_TOKEN 与设置页 Webhook Token 一致`);
@@ -822,8 +847,13 @@ export default function MessagesPage() {
           cache: "no-store",
           headers: token ? { "x-webhook-token": token } : undefined,
         });
-        const data = (await response.json()) as { messages?: CustomerMessage[] };
+        const data = (await response.json()) as { conversations?: InboxConversation[]; messages?: CustomerMessage[] };
         if (!response.ok) return;
+        const incomingConversations = safeArray(data.conversations);
+        if (incomingConversations.length) {
+          persistConversations(incomingConversations);
+          setSelectedConversationId((current) => current || incomingConversations[0]?.id || "");
+        }
         const incoming = safeArray(data.messages);
         if (cancelled || incoming.length === 0) return;
         const merged = mergeCustomerMessages(messages, incoming, orders);
@@ -853,6 +883,130 @@ export default function MessagesPage() {
     setActiveColumn("xianyu");
     setSelectedFolder(sampleMessages[0].customerFolder || sampleMessages[0].customerName);
     setNotice("已加载演示消息");
+  }
+
+  async function analyzeSelectedConversation() {
+    if (!selectedConversation) {
+      setNotice("请先选择一个会话");
+      return;
+    }
+    setConversationProcessing(true);
+    try {
+      const latestCustomerMessage = [...selectedConversation.messages].reverse().find((message) => message.role === "customer")?.content || selectedConversation.latestMessageText;
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          buildAnalyzePayload({
+            chatText: latestCustomerMessage,
+            businessType: selectedConversation.businessType,
+            settings: getSettings(),
+            templates: mergeDefaultTemplates(getTemplates()),
+            knowledgeRules: [...defaultKnowledgeRules, ...getKnowledgeRules()],
+            platform: selectedConversation.platform,
+            conversationHistory: selectedConversation.messages.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              createdAt: message.createdAt,
+            })),
+            mode: "order-followup",
+          }),
+        ),
+      });
+      const data = (await response.json()) as AnalyzeApiResponse & { error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "AI 分析失败");
+      const mapped = mapAnalyzeResponse(data);
+      setConversationAnalysis(mapped);
+      setConversationDraft(mapped.reply || "");
+      setNotice("会话分析已生成，回复草稿不会自动写入历史。");
+    } catch (error) {
+      setNotice(`会话 AI 分析失败：${error instanceof Error ? error.message : "请稍后重试"}`);
+    } finally {
+      setConversationProcessing(false);
+    }
+  }
+
+  async function copyConversationReply() {
+    if (!selectedConversation || !conversationDraft.trim()) {
+      setNotice("暂无可复制回复");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(conversationDraft);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = conversationDraft;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/inbox/reply", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({
+          conversationId: selectedConversation.id,
+          role: "assistant",
+          content: conversationDraft,
+          sourceUrl: selectedConversation.sourceUrl || "",
+        }),
+      });
+      const data = (await response.json()) as { conversation?: InboxConversation; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "写入会话失败");
+      if (data.conversation) {
+        persistConversations([data.conversation, ...conversations.filter((conversation) => conversation.id !== data.conversation?.id)]);
+      }
+      setNotice("已复制回复，并记录到当前会话历史。");
+    } catch (error) {
+      setNotice(`已复制回复，但写入会话失败：${error instanceof Error ? error.message : "请稍后重试"}`);
+    }
+  }
+
+  async function createConversationOutbox() {
+    if (!selectedConversation || !conversationDraft.trim()) {
+      setNotice("暂无可创建的回复草稿");
+      return;
+    }
+    if (String(selectedConversation.platform || "") !== "闲鱼") {
+      setNotice("当前先支持创建闲鱼发送任务。");
+      return;
+    }
+    try {
+      const token = await getWebhookTokenForClient();
+      const response = await fetch("/api/outbox", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "x-webhook-token": token } : {}),
+        },
+        body: JSON.stringify({
+          conversationId: selectedConversation.id,
+          customerFolder: selectedConversation.customerFolder || selectedConversation.customerName,
+          customerName: selectedConversation.customerName,
+          platform: selectedConversation.platform,
+          sourceUrl: selectedConversation.sourceUrl || "",
+          itemTitle: selectedConversation.itemTitle || "",
+          platformThreadId: selectedConversation.platformThreadId || "",
+          externalConversationId: selectedConversation.externalConversationId || "",
+          reply: conversationDraft,
+          mode: "fill",
+        }),
+      });
+      const data = (await response.json()) as { command?: OutboundReplyCommand; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error || "创建发送任务失败");
+      if (data.command) setOutboundCommands((current) => [data.command as OutboundReplyCommand, ...current.filter((item) => item.id !== data.command?.id)]);
+      setNotice("已创建闲鱼发送任务。请打开对应客户聊天页，在插件里点击“填入闲鱼输入框”。");
+    } catch (error) {
+      setNotice(`创建发送任务失败：${error instanceof Error ? error.message : "请稍后重试"}`);
+    }
   }
 
   function updateFolder(oldFolder: string, nextFolder: string) {
@@ -1176,6 +1330,98 @@ export default function MessagesPage() {
       </header>
 
       {notice ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">{notice}</div> : null}
+
+      <Section title="统一会话收件箱" description="优先展示新的 InboxConversation。旧客户文件夹视图仍保留在下方作为兼容层。">
+        {conversations.length === 0 ? (
+          <div className="rounded-md border border-dashed border-amber-200 bg-amber-50/60 p-5 text-sm leading-6 text-slate-600">
+            暂无新会话数据。点击“同步外部消息”后，如果服务端已有 conversations，会优先显示在这里；旧消息仍在下方客户文件夹中展示。
+          </div>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-2">
+                <Metric label="会话数" value={conversations.length} tone="bg-sky-50 text-sky-700" />
+                <Metric label="未读" value={conversationUnreadCount} tone="bg-rose-50 text-rose-700" />
+                <Metric label="平台数" value={new Set(conversations.map((conversation) => conversation.platform)).size} tone="bg-emerald-50 text-emerald-700" />
+              </div>
+              <div className="max-h-[520px] space-y-2 overflow-auto pr-1">
+                {conversations.map((conversation) => {
+                  const active = selectedConversation?.id === conversation.id;
+                  return (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      className={`w-full rounded-2xl border p-3 text-left shadow-sm transition hover:-translate-y-0.5 ${active ? "border-slate-950 bg-slate-950 text-white" : "border-white bg-white hover:bg-sky-50"}`}
+                      onClick={() => setSelectedConversationId(conversation.id)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-semibold">{conversation.customerFolder || conversation.customerName}</div>
+                          <div className={`mt-1 text-xs ${active ? "text-slate-200" : "text-slate-500"}`}>
+                            {conversation.platform} · {conversation.shopAlias || "default-shop"} · {businessTypeLabels[conversation.businessType] || conversation.businessType}
+                          </div>
+                        </div>
+                        {conversation.unreadCount ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-xs font-bold text-white">{conversation.unreadCount}</span> : null}
+                      </div>
+                      {conversation.itemTitle ? <div className={`mt-2 truncate text-xs ${active ? "text-slate-200" : "text-amber-700"}`}>{conversation.itemTitle}</div> : null}
+                      <div className={`mt-2 line-clamp-2 text-sm leading-6 ${active ? "text-white" : "text-slate-700"}`}>{conversation.latestMessageText}</div>
+                      <div className={`mt-2 text-xs ${active ? "text-slate-300" : "text-slate-400"}`}>{new Date(conversation.latestMessageAt || conversation.updatedAt).toLocaleString()} · {conversation.status}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedConversation ? (
+              <div className="rounded-2xl border border-white bg-white p-4 shadow-sm ring-1 ring-slate-100">
+                <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-950">{selectedConversation.customerName || selectedConversation.customerFolder}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {selectedConversation.platform} · {selectedConversation.shopAlias || "default-shop"} · {selectedConversation.itemTitle || "未识别商品"} · {selectedConversation.messages.length} 条消息
+                    </div>
+                    {selectedConversation.sourceUrl ? <div className="mt-1 truncate text-xs text-slate-400">{selectedConversation.sourceUrl}</div> : null}
+                  </div>
+                  <button type="button" className={primaryButtonClass} onClick={analyzeSelectedConversation} disabled={conversationProcessing}>
+                    {conversationProcessing ? "分析中..." : "结合历史 AI 分析"}
+                  </button>
+                </div>
+
+                <div className="mt-4 max-h-80 space-y-3 overflow-auto rounded-2xl bg-slate-50 p-3">
+                  {selectedConversation.messages.map((message) => (
+                    <div key={message.id} className={`rounded-xl border p-3 text-sm ${message.role === "customer" ? "border-sky-100 bg-white" : "border-emerald-100 bg-emerald-50"}`}>
+                      <div className="mb-1 flex items-center justify-between gap-2 text-xs text-slate-500">
+                        <span>{message.role === "customer" ? "客户" : message.role === "assistant" ? "客服回复" : "备注"}</span>
+                        <span>{new Date(message.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div className="whitespace-pre-line leading-6 text-slate-800">{message.content}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {conversationAnalysis ? (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-sm">
+                      <div className="font-semibold text-slate-950">AI 摘要</div>
+                      <div className="mt-2 leading-6 text-slate-700">{conversationAnalysis.summary || conversationAnalysis.customerIntent}</div>
+                      <div className="mt-3 text-xs font-semibold text-slate-500">缺失信息</div>
+                      <div className="mt-1 text-slate-700">{conversationAnalysis.missingInfo.join("、") || "暂无明显缺失"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3 text-sm">
+                      <div className="font-semibold text-slate-950">回复草稿</div>
+                      <textarea className={`${textareaClass} mt-2 min-h-32 bg-white`} value={conversationDraft} onChange={(event) => setConversationDraft(event.target.value)} />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button type="button" className={primaryButtonClass} onClick={copyConversationReply}>??????????</button>
+                        <button type="button" className={secondaryButtonClass} onClick={createConversationOutbox}>????????</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </Section>
 
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <div className="space-y-5">

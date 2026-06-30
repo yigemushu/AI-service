@@ -6,11 +6,15 @@ const outboxFilePath = path.join(process.cwd(), "data", "outbox-commands.json");
 
 type OutboxPayload = {
   id?: unknown;
+  conversationId?: unknown;
   messageId?: unknown;
   orderId?: unknown;
   customerFolder?: unknown;
   customerName?: unknown;
   platform?: unknown;
+  itemTitle?: unknown;
+  platformThreadId?: unknown;
+  externalConversationId?: unknown;
   sourceUrl?: unknown;
   reply?: unknown;
   mode?: unknown;
@@ -69,11 +73,15 @@ export async function addOutboxCommand(payload: OutboxPayload) {
   const now = new Date().toISOString();
   const command: OutboundReplyCommand = {
     id: createOutboxId(),
+    conversationId: safeString(payload.conversationId),
     messageId: safeString(payload.messageId),
     orderId: safeString(payload.orderId),
     customerFolder: safeString(payload.customerFolder) || safeString(payload.customerName) || "待归类",
     customerName: safeString(payload.customerName) || "待识别客户",
     platform: (safeString(payload.platform) || "闲鱼") as SourcePlatform | string,
+    itemTitle: safeString(payload.itemTitle),
+    platformThreadId: safeString(payload.platformThreadId),
+    externalConversationId: safeString(payload.externalConversationId),
     sourceUrl,
     reply,
     mode: normalizeMode(payload.mode),

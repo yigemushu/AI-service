@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addServerInboxMessage, deleteServerInboxCustomer, getServerInboxMessages } from "@/lib/serverInbox";
+import { convertLegacyMessagesToConversations, readInboxConversations, upsertInboxConversationFromPayload } from "@/lib/serverInboxConversations";
+import { appendInboxLog } from "@/lib/serverInboxLogs";
 import { getWebhookAuthDebug, readBodyWebhookToken, requireWebhookAuth } from "@/lib/server/webhookAuth";
 
 export const runtime = "nodejs";
@@ -10,13 +12,35 @@ function logInbox(event: "start" | "success" | "fail", detail: Record<string, un
 
 function safeBodySummary(body: unknown) {
   if (!body || typeof body !== "object") return {};
-  const payload = body as { platform?: unknown; businessType?: unknown; text?: unknown; rawMessage?: unknown; sourceUrl?: unknown };
-  const text = typeof payload.text === "string" ? payload.text : typeof payload.rawMessage === "string" ? payload.rawMessage : "";
+  const payload = body as { platform?: unknown; businessType?: unknown; text?: unknown; rawMessage?: unknown; messageText?: unknown; sourceUrl?: unknown };
+  const text = typeof payload.messageText === "string" ? payload.messageText : typeof payload.text === "string" ? payload.text : typeof payload.rawMessage === "string" ? payload.rawMessage : "";
   return {
     platform: typeof payload.platform === "string" ? payload.platform : "",
     businessType: typeof payload.businessType === "string" ? payload.businessType : "",
     textLength: text.length,
     hasSourceUrl: typeof payload.sourceUrl === "string" && payload.sourceUrl.length > 0,
+  };
+}
+
+function inboxLogPayload(body: unknown) {
+  if (!body || typeof body !== "object") return { platform: "", customerName: "", messageSummary: "" };
+  const payload = body as { platform?: unknown; customerName?: unknown; customerFolder?: unknown; text?: unknown; rawMessage?: unknown; messageText?: unknown };
+  const text = typeof payload.messageText === "string" ? payload.messageText : typeof payload.text === "string" ? payload.text : typeof payload.rawMessage === "string" ? payload.rawMessage : "";
+  return {
+    platform: typeof payload.platform === "string" ? payload.platform : "",
+    customerName: typeof payload.customerName === "string" && payload.customerName.trim() ? payload.customerName : typeof payload.customerFolder === "string" ? payload.customerFolder : "",
+    messageSummary: text.slice(0, 120),
+  };
+}
+
+function withLegacyMessageFields(body: unknown): Parameters<typeof addServerInboxMessage>[0] {
+  if (!body || typeof body !== "object") return {};
+  const payload = body as { rawMessage?: unknown; text?: unknown; messageText?: unknown };
+  const messageText = typeof payload.messageText === "string" ? payload.messageText : "";
+  return {
+    ...payload,
+    rawMessage: typeof payload.rawMessage === "string" && payload.rawMessage.trim() ? payload.rawMessage : messageText,
+    text: typeof payload.text === "string" && payload.text.trim() ? payload.text : messageText,
   };
 }
 
@@ -27,9 +51,17 @@ export async function GET(request: NextRequest) {
     logInbox("fail", { requestId, method: "GET", reason: auth.response.status === 503 ? "token_not_configured" : "token_mismatch", hasEnvToken: auth.hasEnvToken, hasSettingsToken: auth.hasSettingsToken, receivedToken: auth.receivedToken, tokenSource: auth.tokenSource });
     return auth.response;
   }
-  const messages = await getServerInboxMessages();
-  logInbox("success", { requestId, method: "GET", count: messages.length });
-  return NextResponse.json({ messages });
+  try {
+    const messages = await getServerInboxMessages();
+    const storedConversations = await readInboxConversations();
+    const conversations = storedConversations.length ? storedConversations : convertLegacyMessagesToConversations(messages);
+    logInbox("success", { requestId, method: "GET", count: messages.length, conversationCount: conversations.length });
+    return NextResponse.json({ conversations, messages });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to read inbox data";
+    logInbox("fail", { requestId, method: "GET", reason: message });
+    return NextResponse.json({ conversations: [], messages: [], warning: message });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -42,14 +74,24 @@ export async function POST(request: NextRequest) {
     const auth = await requireWebhookAuth(request, bodyToken);
     if (!auth.ok) {
       logInbox("fail", { requestId, method: "POST", reason: auth.response.status === 503 ? "token_not_configured" : "token_mismatch", ...authDebug });
+      await appendInboxLog({ ...inboxLogPayload(body), conversationId: "", duplicated: false, status: "failed", httpStatus: auth.response.status, error: auth.response.status === 503 ? "token_not_configured" : "token_mismatch" }).catch(() => undefined);
       return auth.response;
     }
-    const message = await addServerInboxMessage(body);
-    logInbox("success", { requestId, method: "POST", messageId: message.id });
-    return NextResponse.json({ ok: true, message }, { status: 201 });
+    const result = await upsertInboxConversationFromPayload(body);
+    const message = result.duplicated ? null : await addServerInboxMessage(withLegacyMessageFields(body));
+    logInbox("success", { requestId, method: "POST", conversationId: result.conversationId, duplicated: result.duplicated, messageId: message?.id || "" });
+    await appendInboxLog({ ...inboxLogPayload(body), conversationId: result.conversationId, duplicated: result.duplicated, status: "success", httpStatus: result.duplicated ? 200 : 201 }).catch(() => undefined);
+    return NextResponse.json({
+      ok: true,
+      conversationId: result.conversationId,
+      conversation: result.conversation,
+      message,
+      duplicated: result.duplicated,
+    }, { status: result.duplicated ? 200 : 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid inbox payload";
     logInbox("fail", { requestId, method: "POST", reason: message });
+    await appendInboxLog({ platform: "", customerName: "", messageSummary: "", conversationId: "", duplicated: false, status: "failed", httpStatus: 400, error: message }).catch(() => undefined);
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

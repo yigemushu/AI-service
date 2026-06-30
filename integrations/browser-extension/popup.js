@@ -2,27 +2,35 @@ const DEFAULT_SETTINGS = {
   baseUrl: "http://localhost:3000",
   token: "",
   myNickname: "",
+  shopAlias: "default-shop",
   platform: "闲鱼",
   businessType: "xianyu",
   customerName: "",
   customerFolder: "",
   actionMode: "analyze",
   autoSyncEnabled: false,
+  debugMode: false,
   outboundSyncEnabled: true,
   outboundMode: "fill",
 };
 
 const fields = {
   connectionCode: document.getElementById("connectionCode"),
+  dailyConnection: document.getElementById("dailyConnection"),
+  dailyPage: document.getElementById("dailyPage"),
+  dailyAutoSyncEnabled: document.getElementById("dailyAutoSyncEnabled"),
+  dailyRecent: document.getElementById("dailyRecent"),
   baseUrl: document.getElementById("baseUrl"),
   token: document.getElementById("token"),
   myNickname: document.getElementById("myNickname"),
+  shopAlias: document.getElementById("shopAlias"),
   platform: document.getElementById("platform"),
   businessType: document.getElementById("businessType"),
   customerName: document.getElementById("customerName"),
   customerFolder: document.getElementById("customerFolder"),
   actionMode: document.getElementById("actionMode"),
   autoSyncEnabled: document.getElementById("autoSyncEnabled"),
+  debugMode: document.getElementById("debugMode"),
   outboundSyncEnabled: document.getElementById("outboundSyncEnabled"),
   outboundMode: document.getElementById("outboundMode"),
   rawMessage: document.getElementById("rawMessage"),
@@ -34,8 +42,11 @@ const fields = {
   reply: document.getElementById("reply"),
   diagnosticsPanel: document.getElementById("diagnosticsPanel"),
   copyDiagnostics: document.getElementById("copyDiagnostics"),
+  pageStatusPanel: document.getElementById("pageStatusPanel"),
+  latestFieldsPanel: document.getElementById("latestFieldsPanel"),
   autoSyncStatusPanel: document.getElementById("autoSyncStatusPanel"),
   outboundStatusPanel: document.getElementById("outboundStatusPanel"),
+  syncLinkStatusPanel: document.getElementById("syncLinkStatusPanel"),
 };
 
 let latestContext = { rawMessage: "", sourceUrl: "", analysis: null };
@@ -146,18 +157,26 @@ function buildConfigStatusPayload(autoSyncEnabled, outboundSyncEnabled, outbound
 }
 
 async function loadSettings() {
-  const saved = await chrome.storage.sync.get(DEFAULT_SETTINGS);
+  const [syncedSaved, localSaved] = await Promise.all([
+    chrome.storage.sync.get(DEFAULT_SETTINGS),
+    chrome.storage.local.get(DEFAULT_SETTINGS),
+  ]);
+  const saved = { ...DEFAULT_SETTINGS, ...syncedSaved, ...localSaved };
   fields.baseUrl.value = saved.baseUrl || DEFAULT_SETTINGS.baseUrl;
   fields.token.value = saved.token || "";
   fields.myNickname.value = saved.myNickname || "";
+  fields.shopAlias.value = saved.shopAlias || DEFAULT_SETTINGS.shopAlias;
   fields.platform.value = saved.platform || DEFAULT_SETTINGS.platform;
   fields.businessType.value = saved.businessType || DEFAULT_SETTINGS.businessType;
   fields.customerName.value = saved.customerName || "";
   fields.customerFolder.value = saved.customerFolder || "";
   fields.actionMode.value = saved.actionMode || DEFAULT_SETTINGS.actionMode;
   fields.autoSyncEnabled.checked = Boolean(saved.autoSyncEnabled);
+  if (fields.dailyAutoSyncEnabled) fields.dailyAutoSyncEnabled.checked = Boolean(saved.autoSyncEnabled);
+  fields.debugMode.checked = Boolean(saved.debugMode);
   fields.outboundSyncEnabled.checked = saved.outboundSyncEnabled !== false;
   fields.outboundMode.value = saved.outboundMode || DEFAULT_SETTINGS.outboundMode;
+  renderDailyConnection(saved);
 }
 
 async function saveSettings() {
@@ -166,24 +185,31 @@ async function saveSettings() {
   const autoSyncEnabled = fields.autoSyncEnabled.checked;
   const outboundSyncEnabled = fields.outboundSyncEnabled.checked;
   const outboundMode = fields.outboundMode.value;
-  await chrome.storage.sync.set({
+  const nextSettings = {
     baseUrl,
     token,
     myNickname: getTrimmedValue("myNickname"),
+    shopAlias: getTrimmedValue("shopAlias") || DEFAULT_SETTINGS.shopAlias,
     platform: fields.platform.value,
     businessType: fields.businessType.value,
     customerName: getTrimmedValue("customerName"),
     customerFolder: getTrimmedValue("customerFolder"),
     actionMode: fields.actionMode.value,
     autoSyncEnabled,
+    debugMode: fields.debugMode.checked,
     outboundSyncEnabled,
     outboundMode,
-  });
+  };
+  await Promise.all([
+    chrome.storage.local.set(nextSettings),
+    chrome.storage.sync.set(nextSettings),
+  ]);
   chrome.runtime.sendMessage({ type: "AICS_POLL_OUTBOX_NOW" }).catch(() => undefined);
   fields.baseUrl.value = baseUrl;
   if (token) {
     await postPluginStatusFromPopup(buildConfigStatusPayload(autoSyncEnabled, outboundSyncEnabled, outboundMode));
   }
+  renderDailyConnection({ baseUrl, token });
 }
 
 function parseConnectionCode(rawCode) {
@@ -201,6 +227,7 @@ function parseConnectionCode(rawCode) {
     token: String(config.webhookToken || "").trim(),
     platform: String(config.platform || "闲鱼").trim() || "闲鱼",
     businessType,
+    shopAlias: String(config.shopAlias || "default-shop").trim() || "default-shop",
   };
 }
 
@@ -210,6 +237,7 @@ async function applyConnectionCode(rawCode) {
   fields.token.value = config.token;
   fields.platform.value = config.platform;
   fields.businessType.value = config.businessType;
+  fields.shopAlias.value = config.shopAlias;
   fields.autoSyncEnabled.checked = true;
   fields.outboundSyncEnabled.checked = true;
   fields.outboundMode.value = fields.outboundMode.value || DEFAULT_SETTINGS.outboundMode;
@@ -321,6 +349,8 @@ function renderDiagnostics(data) {
   latestDiagnostics = data || null;
   fields.copyDiagnostics.disabled = !latestDiagnostics;
   fields.diagnosticsPanel.classList.remove("hidden");
+  renderPageStatus(data);
+  renderLatestExtractedFields(data?.latestPayload || data?.payload || null, data?.failureReasons || [], data?.lastFilteredCandidate || null);
   if (!data?.ok) {
     fields.diagnosticsPanel.innerHTML = `<strong>诊断失败</strong><br>${escapeHtml(data?.error || "当前页面没有响应插件诊断")}`;
     return;
@@ -348,6 +378,105 @@ function renderDiagnostics(data) {
       : "",
     recent.length ? `<ul>${recent.map((item) => `<li>${escapeHtml(String(item).slice(0, 80))}</li>`).join("")}</ul>` : "",
   ].join("");
+}
+
+function renderPageStatus(data) {
+  if (!fields.pageStatusPanel) return;
+  if (!data) {
+    fields.pageStatusPanel.className = "status-card muted";
+    fields.pageStatusPanel.textContent = "页面识别：未检查";
+    return;
+  }
+  if (!data.ok) {
+    fields.pageStatusPanel.className = "status-card error";
+    fields.pageStatusPanel.textContent = `页面识别失败：${data.error || "未知错误"}`;
+    return;
+  }
+  const reasons = safeArray(data.failureReasons).filter(Boolean);
+  const isOk = Boolean(data.isXianyuPage) && reasons.length === 0;
+  fields.pageStatusPanel.className = `status-card ${isOk ? "ok" : "error"}`;
+  fields.pageStatusPanel.innerHTML = [
+    `<strong>页面识别：${data.isXianyuPage ? "闲鱼" : "未识别"}</strong>`,
+    `消息候选：${Number(data.messageCandidateCount || 0)} 条`,
+    `客户昵称：${escapeHtml(data.latestPayload?.customerName || data.inferredCustomerName || "") || "未提取"}`,
+    reasons.length ? `原因：${reasons.map(escapeHtml).join(" / ")}` : "",
+  ].filter(Boolean).join("<br>");
+  renderDailyPage(data);
+}
+
+function renderLatestExtractedFields(payload, failureReasons = [], lastFilteredCandidate = null) {
+  if (!fields.latestFieldsPanel) return;
+  const reasons = safeArray(failureReasons).filter(Boolean);
+  const filteredText = lastFilteredCandidate?.text ? String(lastFilteredCandidate.text) : "";
+  const filteredReason = lastFilteredCandidate?.reason ? String(lastFilteredCandidate.reason) : "";
+  const filteredLine = filteredText
+    ? `最近被过滤：${escapeHtml(filteredText)}${filteredReason ? `（原因：${escapeHtml(filteredReason)}）` : ""}`
+    : "";
+  if (!payload) {
+    fields.latestFieldsPanel.className = "diagnostics muted";
+    fields.latestFieldsPanel.innerHTML = [
+      "<strong>最近捕获字段</strong>",
+      "暂无捕获到的买家消息。",
+      reasons.length ? `原因：${reasons.map(escapeHtml).join(" / ")}` : "",
+      filteredLine,
+      "识别失败时，请截图这个面板发回来；不要发送 Cookie、Token、密码。",
+    ].filter(Boolean).join("<br>");
+    renderDailyRecent(null, reasons);
+    return;
+  }
+  const rows = [
+    ["customerName", payload.customerName],
+    ["itemTitle", payload.itemTitle],
+    ["messageText", payload.messageText || payload.rawMessage || payload.text],
+    ["messageTime", payload.messageTime],
+    ["sourceUrl", payload.sourceUrl],
+    ["externalConversationId", payload.externalConversationId],
+    ["platformThreadId", payload.platformThreadId],
+    ["externalMessageId", payload.externalMessageId],
+  ];
+  fields.latestFieldsPanel.className = "diagnostics";
+  fields.latestFieldsPanel.innerHTML = [
+    "<strong>最近捕获字段</strong>",
+    ...rows.map(([label, value]) => `${label}: ${escapeHtml(value || "") || "未提取"}`),
+    reasons.length ? `原因：${reasons.map(escapeHtml).join(" / ")}` : "",
+    filteredLine,
+    "调试信息只在插件本地展示，不会上传 Cookie、Token、密码。",
+  ].filter(Boolean).join("<br>");
+  renderDailyRecent(payload, reasons);
+}
+
+function renderDailyConnection(settings = {}) {
+  if (!fields.dailyConnection) return;
+  const baseUrl = String(settings.baseUrl || fields.baseUrl?.value || "").trim();
+  const token = String(settings.token || fields.token?.value || "").trim();
+  const connected = Boolean(baseUrl && token);
+  fields.dailyConnection.className = `status-card ${connected ? "ok" : "error"}`;
+  fields.dailyConnection.textContent = connected ? `连接状态：已连接 ${baseUrl}` : "连接状态：未连接，请先导入连接码";
+}
+
+function renderDailyPage(data) {
+  if (!fields.dailyPage) return;
+  if (!data?.ok) {
+    fields.dailyPage.className = "status-card error";
+    fields.dailyPage.textContent = "当前页面：未检测，请打开闲鱼聊天页后刷新插件";
+    return;
+  }
+  const ok = Boolean(data.isXianyuPage);
+  fields.dailyPage.className = `status-card ${ok ? "ok" : "error"}`;
+  fields.dailyPage.textContent = ok ? "当前页面：已识别闲鱼" : "当前页面：未识别为闲鱼聊天页";
+}
+
+function renderDailyRecent(payload, reasons = []) {
+  if (!fields.dailyRecent) return;
+  if (!payload) {
+    fields.dailyRecent.className = "status-card muted";
+    fields.dailyRecent.textContent = reasons.length ? `最近同步：暂无，${reasons[0]}` : "最近同步：暂无";
+    return;
+  }
+  const customer = payload.customerName || payload.customerFolder || "客户";
+  const text = String(payload.messageText || payload.rawMessage || payload.text || "").slice(0, 44);
+  fields.dailyRecent.className = "status-card ok";
+  fields.dailyRecent.textContent = `最近同步：${customer} - ${text || "已捕获消息"}`;
 }
 
 function formatDiagnosticsForCopy(data) {
@@ -454,13 +583,57 @@ function renderOutboundStatus(status) {
   );
 }
 
+function renderSyncLinkStatus(status) {
+  if (!fields.syncLinkStatusPanel) return;
+  if (!status) {
+    fields.syncLinkStatusPanel.className = "status-card muted";
+    fields.syncLinkStatusPanel.innerHTML = "<strong>同步链路</strong><br>等待检测当前闲鱼页面。";
+    return;
+  }
+  const ok = Boolean(status.inboxOk || status.lastInboxStatus === 200 || status.lastInboxStatus === 201);
+  const error = status.lastError || status.error || "";
+  fields.syncLinkStatusPanel.className = `status-card ${ok ? "ok" : error ? "error" : "muted"}`;
+  fields.syncLinkStatusPanel.innerHTML = [
+    "<strong>同步链路状态</strong>",
+    `页面：${status.isXianyuPage ? "已识别闲鱼" : "未识别闲鱼"}`,
+    `自动同步：${status.autoSyncEnabled ? "开" : "关"}`,
+    `监听器：${status.observerRunning ? "运行中" : "未运行"}`,
+    status.lastDomChangeAt ? `DOM 变化：${escapeHtml(status.lastDomChangeAt)}` : "DOM 变化：暂无",
+    `候选消息：${Number(status.candidateCount || 0)}`,
+    `过滤消息：${Number(status.filteredCount || 0)}`,
+    status.lastCapturedSummary ? `最近捕获：${escapeHtml(status.lastCapturedSummary)}` : "最近捕获：暂无",
+    status.lastInboxAt ? `发送 /api/inbox：${escapeHtml(status.lastInboxAt)}` : "发送 /api/inbox：暂无",
+    status.lastInboxStatus ? `响应状态：HTTP ${Number(status.lastInboxStatus)}${status.duplicated ? "（重复）" : ""}` : "响应状态：暂无",
+    status.conversationId ? `conversationId：${escapeHtml(status.conversationId)}` : "",
+    status.requestUrl ? `请求：${escapeHtml(status.requestUrl)}` : "",
+    status.tokenPresent === false ? "Token：未填写" : status.tokenPresent === true ? "Token：已携带" : "",
+    error ? `错误：${escapeHtml(error)}` : "",
+    status.lastFilteredText ? `最近过滤：${escapeHtml(status.lastFilteredText)}${status.lastFilteredReason ? `（${escapeHtml(status.lastFilteredReason)}）` : ""}` : "",
+  ].filter(Boolean).join("<br>");
+  const candidateDetails = Array.isArray(status.candidateDetails) ? status.candidateDetails.slice(-5) : [];
+  if (status.lastChosenCandidate || candidateDetails.length) {
+    fields.syncLinkStatusPanel.insertAdjacentHTML("beforeend", [
+      status.lastChosenCandidate ? `<br>最终选择：${escapeHtml(status.lastChosenCandidate)}` : "",
+      candidateDetails.length
+        ? `<br><details><summary>最近候选消息</summary>${candidateDetails.map((item) => `${item.filtered ? "过滤" : "候选"}：${escapeHtml(item.text || "")}${item.reason ? `（${escapeHtml(item.reason)}）` : ""}`).join("<br>")}</details>`
+        : "",
+    ].filter(Boolean).join(""));
+  }
+}
+
 async function loadRuntimeStatuses() {
-  const { autoSyncStatus, outboundStatus } = await chrome.storage.local.get({
+  const { autoSyncStatus, outboundStatus, lastCapturedInboxPayload, lastPageDiagnostics, syncLinkStatus } = await chrome.storage.local.get({
     autoSyncStatus: null,
     outboundStatus: null,
+    lastCapturedInboxPayload: null,
+    lastPageDiagnostics: null,
+    syncLinkStatus: null,
   });
   renderAutoSyncStatus(autoSyncStatus);
   renderOutboundStatus(outboundStatus);
+  renderSyncLinkStatus(syncLinkStatus);
+  renderPageStatus(lastPageDiagnostics);
+  renderLatestExtractedFields(lastCapturedInboxPayload || lastPageDiagnostics?.latestPayload || null, lastPageDiagnostics?.failureReasons || []);
 }
 
 async function diagnoseCurrentPage() {
@@ -473,6 +646,14 @@ async function diagnoseCurrentPage() {
     throw new Error("当前页面没有加载插件脚本。请确认打开的是闲鱼聊天页，并刷新页面后重试");
   }
   renderDiagnostics(response);
+  await chrome.storage.local.set({
+    lastPageDiagnostics: response,
+    lastCapturedInboxPayload: response?.latestPayload || response?.payload || null,
+  });
+  await postHeartbeatFromPopup({
+    pageStatus: response?.isXianyuPage ? "xianyu-detected" : "not-detected",
+    lastCapturedSummary: response?.latestPayload?.messageText || response?.latestPayload?.rawMessage || "",
+  }).catch(() => undefined);
   return response;
 }
 
@@ -486,19 +667,38 @@ async function captureLatestMessageFromPage() {
     throw new Error("当前页面没有加载插件脚本。请确认打开的是闲鱼聊天页，并刷新页面后重试");
   }
   if (!response?.ok) throw new Error(response?.error || "同步当前页最新消息失败");
+  renderLatestExtractedFields(response.payload || null, []);
+  await chrome.storage.local.set({ lastCapturedInboxPayload: response.payload || null });
   return response.payload;
 }
 
 function buildInboxPayload(rawMessage, sourceUrl = "") {
+  const now = new Date().toISOString();
+  const customerName = getTrimmedValue("customerName");
+  const customerFolder = getTrimmedValue("customerFolder") || customerName;
+  const externalMessageId = [
+    fields.platform.value,
+    getTrimmedValue("shopAlias") || DEFAULT_SETTINGS.shopAlias,
+    customerFolder || customerName || "unknown-customer",
+    rawMessage,
+    sourceUrl,
+  ].join("|");
   return {
-    customerName: getTrimmedValue("customerName"),
-    customerFolder: getTrimmedValue("customerFolder") || getTrimmedValue("customerName"),
+    customerName,
+    customerFolder,
     platform: fields.platform.value,
+    shopAlias: getTrimmedValue("shopAlias") || DEFAULT_SETTINGS.shopAlias,
     sourceChannel: "浏览器插件",
     businessType: fields.businessType.value,
     text: rawMessage,
     rawMessage,
+    messageText: rawMessage,
+    messageTime: now,
     sourceUrl,
+    direction: "inbound",
+    externalConversationId: "",
+    platformThreadId: sourceUrl,
+    externalMessageId,
   };
 }
 
@@ -510,11 +710,19 @@ function buildInboxPayloadFromPage(pagePayload) {
     customerName,
     customerFolder,
     platform: fields.platform.value || pagePayload?.platform || DEFAULT_SETTINGS.platform,
+    shopAlias: getTrimmedValue("shopAlias") || String(pagePayload?.shopAlias || DEFAULT_SETTINGS.shopAlias).trim(),
     sourceChannel: "浏览器插件",
     businessType: fields.businessType.value || pagePayload?.businessType || DEFAULT_SETTINGS.businessType,
     text: rawMessage,
     rawMessage,
+    messageText: rawMessage,
+    messageTime: String(pagePayload?.messageTime || new Date().toISOString()).trim(),
     sourceUrl: String(pagePayload?.sourceUrl || "").trim(),
+    direction: "inbound",
+    itemTitle: String(pagePayload?.itemTitle || "").trim(),
+    externalConversationId: String(pagePayload?.externalConversationId || "").trim(),
+    platformThreadId: String(pagePayload?.platformThreadId || pagePayload?.sourceUrl || "").trim(),
+    externalMessageId: String(pagePayload?.externalMessageId || "").trim(),
   };
 }
 
@@ -556,7 +764,24 @@ async function sendToInbox(rawMessage, sourceUrl = "") {
 async function sendPagePayloadToInbox(pagePayload) {
   const { baseUrl, token } = validateInboxConfig();
   const inboxPayload = buildInboxPayloadFromPage(pagePayload);
-  const response = await fetch(buildUrl(baseUrl, "/api/inbox"), {
+  const requestUrl = buildUrl(baseUrl, "/api/inbox");
+  const existingStatus = await chrome.storage.local.get({ syncLinkStatus: {} });
+  const previousSyncLinkStatus = existingStatus.syncLinkStatus || {};
+  await chrome.storage.local.set({
+    syncLinkStatus: {
+      ...previousSyncLinkStatus,
+      isXianyuPage: true,
+      autoSyncEnabled: fields.autoSyncEnabled.checked,
+      observerRunning: true,
+      candidateCount: 1,
+      filteredCount: 0,
+      lastCapturedSummary: String(inboxPayload.rawMessage || "").slice(0, 80),
+      lastInboxAt: new Date().toISOString(),
+      requestUrl,
+      tokenPresent: Boolean(token),
+    },
+  });
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -565,6 +790,25 @@ async function sendPagePayloadToInbox(pagePayload) {
     body: JSON.stringify(inboxPayload),
   });
   const data = await response.json().catch(() => ({}));
+  await chrome.storage.local.set({
+    syncLinkStatus: {
+      ...previousSyncLinkStatus,
+      isXianyuPage: true,
+      autoSyncEnabled: fields.autoSyncEnabled.checked,
+      observerRunning: true,
+      candidateCount: 1,
+      filteredCount: 0,
+      lastCapturedSummary: String(inboxPayload.rawMessage || "").slice(0, 80),
+      lastInboxAt: new Date().toISOString(),
+      lastInboxStatus: response.status,
+      requestUrl,
+      tokenPresent: Boolean(token),
+      inboxOk: response.ok,
+      conversationId: data.conversationId || "",
+      duplicated: Boolean(data.duplicated),
+      lastError: response.ok ? "" : data.error || `HTTP ${response.status}`,
+    },
+  });
   if (!response.ok) throw new Error(statusError(response.status, data, "发送失败"));
   fields.rawMessage.value = inboxPayload.rawMessage;
   if (!fields.customerName.value && inboxPayload.customerName) fields.customerName.value = inboxPayload.customerName;
@@ -600,6 +844,29 @@ async function postPluginStatusFromPopup(payload) {
   }).catch(() => undefined);
 }
 
+async function postHeartbeatFromPopup(extra = {}) {
+  const { baseUrl, token } = validateInboxConfig();
+  const latestPayload = latestDiagnostics?.latestPayload || null;
+  await fetch(buildUrl(baseUrl, "/api/plugin/heartbeat"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      siteOrigin: baseUrl,
+      platform: fields.platform.value,
+      shopAlias: getTrimmedValue("shopAlias") || DEFAULT_SETTINGS.shopAlias,
+      pageStatus: latestDiagnostics?.isXianyuPage ? "xianyu-detected" : "not-detected",
+      autoSyncEnabled: fields.autoSyncEnabled.checked,
+      lastSyncAt: "",
+      lastCapturedSummary: latestPayload?.messageText || latestPayload?.rawMessage || "",
+      extensionVersion: chrome.runtime.getManifest?.().version || "",
+      ...extra,
+    }),
+  }).catch(() => undefined);
+}
+
 async function postCurrentConfigStatusFromPopup() {
   if (!getTrimmedValue("token")) return;
   await postPluginStatusFromPopup(buildConfigStatusPayload(
@@ -607,6 +874,7 @@ async function postCurrentConfigStatusFromPopup() {
     fields.outboundSyncEnabled.checked,
     fields.outboundMode.value,
   ));
+  await postHeartbeatFromPopup();
 }
 
 async function syncOpenSiteStorage(kind, record) {
@@ -744,9 +1012,21 @@ document.getElementById("importConnectionCode").addEventListener("click", async 
     setStatus("正在导入配置...");
     const { baseUrl, token } = await applyConnectionCode(fields.connectionCode.value);
     await testConnectionWith(baseUrl, token);
+    await postHeartbeatFromPopup();
     setStatus("配置已导入并保存。自动同步和回闲鱼已开启，可打开闲鱼闭环验证开始实机测试");
   } catch (error) {
     setStatus(humanError(error, "导入连接码失败"), true);
+  }
+});
+
+document.getElementById("dailyAutoSyncEnabled")?.addEventListener("change", async (event) => {
+  fields.autoSyncEnabled.checked = Boolean(event.target.checked);
+  try {
+    await saveSettings();
+    await postHeartbeatFromPopup();
+    setStatus(fields.autoSyncEnabled.checked ? "已开始监听闲鱼新消息" : "已暂停监听");
+  } catch (error) {
+    setStatus(humanError(error, "保存监听开关失败"), true);
   }
 });
 
@@ -772,6 +1052,7 @@ document.getElementById("testConnection").addEventListener("click", async () => 
   try {
     const { baseUrl, token } = validateInboxConfig();
     await testConnectionWith(baseUrl, token);
+    await postHeartbeatFromPopup();
     setStatus("网站可访问，Token 正确");
   } catch (error) {
     setStatus(humanError(error, "测试连接失败"), true);
@@ -810,6 +1091,17 @@ document.getElementById("syncLatestPageMessage").addEventListener("click", async
     await saveSettings();
     setStatus("正在同步当前页最新消息...");
     const pagePayload = await captureLatestMessageFromPage();
+    renderLatestExtractedFields(pagePayload, []);
+    const preview = [
+      `客户：${pagePayload.customerName || "未提取"}`,
+      `商品：${pagePayload.itemTitle || "未提取"}`,
+      `消息：${String(pagePayload.messageText || pagePayload.rawMessage || "").slice(0, 120)}`,
+      `页面：${pagePayload.sourceUrl || ""}`,
+    ].join("\n");
+    if (!window.confirm(`确认同步这条客户消息到消息中心吗？\n\n${preview}`)) {
+      setStatus("已取消同步");
+      return;
+    }
     const result = await sendPagePayloadToInbox(pagePayload);
     await syncOpenSiteStorage("message", result.message);
     await postPluginStatusFromPopup({
@@ -828,7 +1120,7 @@ document.getElementById("syncLatestPageMessage").addEventListener("click", async
         updatedAt: Date.now(),
       },
     });
-    setStatus("当前页最新消息已同步到消息中心");
+    setStatus(`当前页最新消息已同步：${result.conversationId || "已写入"}${result.duplicated ? "（重复消息）" : ""}`);
   } catch (error) {
     const message = humanError(error, "同步当前页最新消息失败");
     await postPluginStatusFromPopup({ kind: "autoSync", ok: false, action: "手动同步", error: message }).catch(() => undefined);
@@ -911,13 +1203,55 @@ document.getElementById("openXianyuMvp").addEventListener("click", async () => {
   }
 });
 
+document.getElementById("dailyGenerateReply")?.addEventListener("click", () => {
+  document.getElementById("analyze")?.click();
+});
+
+document.getElementById("dailySyncLatestPageMessage")?.addEventListener("click", () => {
+  document.getElementById("syncLatestPageMessage")?.click();
+});
+
+document.getElementById("dailyFillPendingReply")?.addEventListener("click", async () => {
+  try {
+    setStatus("正在填入闲鱼输入框...");
+    const result = await chrome.runtime.sendMessage({ type: "AICS_FILL_PENDING_OUTBOX" });
+    if (!result?.ok) throw new Error(result?.error || "填入失败");
+    await loadRuntimeStatuses();
+    setStatus("已填入闲鱼输入框，请确认内容后手动发送");
+  } catch (error) {
+    setStatus(humanError(error, "填入闲鱼输入框失败"), true);
+  }
+});
+
+document.getElementById("dailyCopyReply")?.addEventListener("click", () => {
+  document.getElementById("copyReply")?.click();
+});
+
+document.getElementById("dailySaveOrder")?.addEventListener("click", () => {
+  document.getElementById("saveOrder")?.click();
+});
+
+document.getElementById("dailyOpenMessages")?.addEventListener("click", () => {
+  document.getElementById("openMessages")?.click();
+});
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.autoSyncStatus) renderAutoSyncStatus(changes.autoSyncStatus.newValue || null);
+  if (changes.syncLinkStatus) renderSyncLinkStatus(changes.syncLinkStatus.newValue || null);
   if (changes.outboundStatus) renderOutboundStatus(changes.outboundStatus.newValue || null);
+  if (changes.lastCapturedInboxPayload) renderLatestExtractedFields(changes.lastCapturedInboxPayload.newValue || null, []);
+  if (changes.lastPageDiagnostics) renderDiagnostics(changes.lastPageDiagnostics.newValue || null);
 });
 
 loadSettings().then(async () => {
   await Promise.all([loadLastResult(), loadRuntimeStatuses()]);
   await postCurrentConfigStatusFromPopup().catch(() => undefined);
+  await diagnoseCurrentPage().catch((error) => {
+    renderDiagnostics({ ok: false, error: humanError(error, "当前页面未加载诊断脚本") });
+  });
 });
+
+window.setInterval(() => {
+  if (fields.autoSyncEnabled?.checked) postHeartbeatFromPopup().catch(() => undefined);
+}, 20_000);

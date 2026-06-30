@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getCustomerMessages, getOrders, getWebhookTokenForClient } from "@/lib/storage";
-import type { CustomerMessage, Order } from "@/lib/types";
+import type { CustomerMessage, InboxConversation, Order } from "@/lib/types";
 
 const navItems: Array<{ href: string; label: string; badge?: "newOrders" | "newMessages" }> = [
   { href: "/", label: "工作台" },
@@ -37,8 +37,10 @@ async function fetchServerCounts() {
   let messages = 0;
   let orders = 0;
   if (inboxResponse.status === "fulfilled" && inboxResponse.value.ok) {
-    const data = (await inboxResponse.value.json().catch(() => ({}))) as { messages?: CustomerMessage[] };
-    messages = Array.isArray(data.messages) ? data.messages.filter((message) => message.isNew).length : 0;
+    const data = (await inboxResponse.value.json().catch(() => ({}))) as { conversations?: InboxConversation[]; messages?: CustomerMessage[] };
+    messages = Array.isArray(data.conversations) && data.conversations.length
+      ? data.conversations.reduce((sum, conversation) => sum + (conversation.unreadCount || 0), 0)
+      : Array.isArray(data.messages) ? data.messages.filter((message) => message.isNew).length : 0;
   }
   if (ordersResponse.status === "fulfilled" && ordersResponse.value.ok) {
     const data = (await ordersResponse.value.json().catch(() => ({}))) as { orders?: Order[] };
